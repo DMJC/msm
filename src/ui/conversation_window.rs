@@ -279,6 +279,12 @@ impl ConversationWindow {
         cw.older_button.connect_clicked(move |_| c.load_older());
         let c = cw.clone();
         attach_btn.connect_clicked(move |_| c.choose_and_send_file());
+        let c = cw.clone();
+        cw.input.connect_paste_clipboard(move |input| {
+            if c.paste_image() {
+                input.stop_signal_emission_by_name("paste-clipboard");
+            }
+        });
         // Dropping files from a file manager sends them (local files only).
         let c = cw.clone();
         cw.window.drag_dest_set(
@@ -917,6 +923,39 @@ impl ConversationWindow {
     }
 
     fn send_file(self: &Rc<Self>, path: std::path::PathBuf) {
+        self.upload(path, false);
+    }
+
+    /// Paste an image from the clipboard as a PNG attachment. Returns false if
+    /// the clipboard holds no image (the normal text paste then proceeds).
+    fn paste_image(self: &Rc<Self>) -> bool {
+        let clipboard = gtk::Clipboard::default(&gtk::gdk::Display::default().expect("display"))
+            .expect("clipboard");
+        if !clipboard.wait_is_image_available() {
+            return false;
+        }
+        let Some(pixbuf) = clipboard.wait_for_image() else {
+            return false;
+        };
+        let stamp = glib::DateTime::now_local()
+            .ok()
+            .and_then(|d| d.format("%Y%m%d-%H%M%S").ok())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        let dir = std::env::temp_dir().join(format!("msm-paste-{}", std::process::id()));
+        let path = dir.join(format!("pasted-image-{stamp}.png"));
+        let saved =
+            std::fs::create_dir_all(&dir).is_ok() && pixbuf.savev(&path, "png", &[]).is_ok();
+        if !saved {
+            self.typing.set_text("Could not read the pasted image.");
+            return true;
+        }
+        self.upload(path, true);
+        true
+    }
+
+    /// Upload `path`; `temporary` files are deleted afterwards.
+    fn upload(self: &Rc<Self>, path: std::path::PathBuf, temporary: bool) {
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -925,9 +964,13 @@ impl ConversationWindow {
         let (room, this) = (self.room.clone(), self.clone());
         spawn_async(
             async move {
-                media::send_file(&room, &path)
+                let res = media::send_file(&room, &path)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(|e| e.to_string());
+                if temporary {
+                    let _ = std::fs::remove_file(&path);
+                }
+                res
             },
             move |res| match res {
                 // The message itself arrives through the live event feed.
