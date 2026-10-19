@@ -111,16 +111,19 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     let group = gtk::Button::with_label("New group");
     let room = gtk::Button::with_label("New room");
     let logout = gtk::Button::with_label("Sign out");
+    let security = gtk::Button::with_label("Security…");
     for b in [&add, &group] {
         bar.pack_start(b, true, true, 0);
     }
     let bar2 = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    for b in [&room, &logout] {
+    for b in [&room, &security, &logout] {
         bar2.pack_start(b, true, true, 0);
     }
     root.pack_start(&bar, false, false, 0);
     root.pack_start(&bar2, false, false, 0);
 
+    let a = app.clone();
+    security.connect_clicked(move |_| crate::ui::security_dialog::open(&a));
     let a = app.clone();
     room.connect_clicked(move |_| {
         let Some(name) = prompt(&a, "New room", "Room name", "") else {
@@ -614,6 +617,21 @@ fn group_menu(app: &Rc<App>, group: &str) -> gtk::Menu {
 
 /// Modal single-line prompt. Returns `None` if cancelled.
 pub fn prompt(app: &Rc<App>, title: &str, placeholder: &str, initial: &str) -> Option<String> {
+    prompt_with(app, title, placeholder, initial, false)
+}
+
+/// Like [`prompt`] but the text is masked (passwords, recovery keys).
+pub fn prompt_secret(app: &Rc<App>, title: &str, placeholder: &str) -> Option<String> {
+    prompt_with(app, title, placeholder, "", true)
+}
+
+fn prompt_with(
+    app: &Rc<App>,
+    title: &str,
+    placeholder: &str,
+    initial: &str,
+    secret: bool,
+) -> Option<String> {
     let d = gtk::Dialog::with_buttons(
         Some(title),
         Some(&app.window),
@@ -627,6 +645,7 @@ pub fn prompt(app: &Rc<App>, title: &str, placeholder: &str, initial: &str) -> O
     let e = gtk::Entry::new();
     e.set_placeholder_text(Some(placeholder));
     e.set_text(initial);
+    e.set_visibility(!secret);
     e.set_activates_default(true);
     e.set_margin(12);
     d.content_area().add(&e);
@@ -637,7 +656,7 @@ pub fn prompt(app: &Rc<App>, title: &str, placeholder: &str, initial: &str) -> O
     (r == gtk::ResponseType::Ok).then_some(text)
 }
 
-fn error_dialog(app: &Rc<App>, msg: &str) {
+pub fn error_dialog(app: &Rc<App>, msg: &str) {
     let d = gtk::MessageDialog::new(
         Some(&app.window),
         gtk::DialogFlags::MODAL,

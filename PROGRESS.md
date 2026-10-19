@@ -77,18 +77,33 @@ UI is still a placeholder window.
 - Tests: 42 unit + 9 integration (integration last run before this feature; the feature touches only the app crate and presence.rs) ;
   clippy/fmt clean.
 
+## Session 7
+- Phase 8 (security), first part:
+  - `matrix::encryption`: security status (cross-signing, recovery state, key backup, this-device verification), own device list,
+    `setup_recovery` (cross-signing bootstrap incl. the server's password challenge, then secret storage + key backup -> recovery key),
+    `recover` (unlock with recovery key). Secrets are never logged; the recovery key is not stored by the app.
+  - Integration test `recovery_key_lets_a_new_device_read_old_encrypted_history` (fresh account per run): old encrypted message is
+    unreadable on a new device without the key, wrong key is rejected, and it decrypts after `recover` + backup download. Passed 3/3 runs.
+  - UI: "Security..." dialog (status, devices with verified marks, Set up recovery / Enter recovery key, buttons enabled only when applicable),
+    masked prompt for password / key, one-time recovery-key dialog with copy button. Verified in the GUI (nested X server): setup via the
+    password prompt, key shown, status refreshed, and state persisted after an app restart.
+  - Note: our own device is always locally trusted in the crypto store, so "verified" for this device means *cross-signed by its owner*.
+- **Crash fixed:** `spawn_async` callbacks ran inside a GLib future, so any callback opening a modal dialog (`Dialog::run`) panicked with
+  `EnterError` and killed the app. Callbacks now run from an idle source. (Found by the GUI test; would have hit any error dialog shown after an async call.)
+- Tests: 42 unit + 10 integration pass; clippy/fmt clean.
+
 ## Known problems / not verified
-- Not tested against Element or other third-party clients; no device verification/key-backup UI.
+- No interactive device verification yet (emoji/SAS between two devices, verifying other users); only cross-signing/recovery. Per-message encryption indicators not done.
+- Recovery key reset / disable and signing out other devices are not implemented. Recovery tested on Synapse only.
+- Not tested against Element or other third-party clients.
 - The three-account GUI acceptance scenario (independent nicknames in a group) has not been run end to end.
 - "Load older messages" can show when nothing older exists.
 - Hide-to-tray via a real window-close click and the installed .desktop taskbar icon are unverified on the user's panel.
-- Not implemented: friend requests, media/file transfer, reactions, sending edits, in-conversation search, avatars, device verification,
-  kick/ban and room settings, settings dialog (settings are inline in the main window).
-- Idle detection needs a Wayland compositor with ext-idle-notify-v1 (Wayfire has it); X11 sessions have no automatic Away.
-- Contact cache assumes a single account. Unread counts sum all DMs with a contact.
+- Not implemented: friend requests, media/file transfer, reactions, sending edits, in-conversation search, avatars, kick/ban and room settings.
+- Idle detection needs a Wayland compositor with ext-idle-notify-v1. Contact cache assumes a single account.
 
 ## Exact next task
-1. Device verification + key backup/recovery UI and encryption status indicators (Phase 8).
+1. Interactive verification (SAS emoji) between own devices / other users + per-message encryption indicators.
 2. Media/file attachments, avatars, reactions, sending edits, in-conversation search (Phase 9).
-3. Friend requests (app-specific protocol over private data, clearly separate from invites).
+3. Friend requests (app-specific, over private data; separate from room invites).
 4. Third-party interop test (Element Web against local Synapse) and the three-account acceptance scenario.

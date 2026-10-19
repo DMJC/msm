@@ -495,3 +495,119 @@ async fn group_room_invite_accept_reject_message_and_members() {
             .all(|r| r.room_id() != room.room_id())
     );
 }
+
+/// Register a brand-new user (a user can only have one key backup, so reruns need fresh accounts).
+async fn register_fresh(hs: &str) -> (Client, String, String) {
+    use matrix_sdk::ruma::api::client::account::register;
+    use matrix_sdk::ruma::api::client::uiaa::{AuthData, Dummy};
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let name = format!("sec{}x{}", std::process::id(), nanos % 1_000_000_000);
+    let pw = format!("pw-{name}-123");
+    let client = Client::builder().homeserver_url(hs).build().await.unwrap();
+    let mut req = register::v3::Request::new();
+    req.username = Some(name.clone());
+    req.password = Some(pw.clone());
+    req.auth = Some(AuthData::Dummy(Dummy::new()));
+    client.matrix_auth().register(req).await.expect("register");
+    (client, name, pw)
+}
+
+#[tokio::test]
+async fn recovery_key_lets_a_new_device_read_old_encrypted_history() {
+    use msm::matrix::encryption::{self, Recovery};
+    let Some(hs) = homeserver() else { return };
+    let (a, name, pw) = register_fresh(&hs).await;
+    sync_a_bit(&a).await;
+
+    // Wrong password must fail cleanly before anything is set up.
+    let before = encryption::status(&a).await;
+    assert!(!before.cross_signing_ready);
+    assert_eq!(before.recovery, Recovery::Disabled);
+
+    let key = encryption::setup_recovery(&a, &pw)
+        .await
+        .expect("setup recovery");
+    assert!(
+        key.split_whitespace().count() >= 4,
+        "recovery key should look like a grouped key"
+    );
+    let after = encryption::status(&a).await;
+    assert!(after.cross_signing_ready, "{after:?}");
+    assert_eq!(after.recovery, Recovery::Enabled);
+    assert!(after.backup_enabled);
+
+    // An encrypted message sent *before* the second device exists.
+    let room = rooms::create_group(&a, "Secret history", &[])
+        .await
+        .unwrap();
+    sync_a_bit(&a).await;
+    let body = format!("old secret {name}");
+    rooms::send_text(&room, &body, matrix_sdk::ruma::TransactionId::new())
+        .await
+        .unwrap();
+    sync_a_bit(&a).await;
+    a.encryption()
+        .backups()
+        .wait_for_steady_state()
+        .await
+        .unwrap();
+
+    // Device B: same user, brand new device.
+    let b = login_as_with(&hs, &name, &pw, "sec-b").await;
+    for _ in 0..3 {
+        sync_a_bit(&b).await;
+    }
+    let st = encryption::status(&b).await;
+    assert!(!st.this_device_verified, "a new device starts unverified");
+    assert_eq!(encryption::own_devices(&b).await.unwrap().len(), 2);
+    assert!(
+        encryption::recover(&b, "definitely not the key")
+            .await
+            .is_err()
+    );
+
+    let read = |b: Client, room_id: matrix_sdk::ruma::OwnedRoomId, body: String| async move {
+        let room = b.get_room(&room_id)?;
+        let h = rooms::load_history(&room, None, 20).await.ok()?;
+        h.events.into_iter().find_map(|e| match e {
+            Parsed::Message(m) if !m.undecryptable && m.body == body => Some(m),
+            _ => None,
+        })
+    };
+    assert!(
+        read(b.clone(), room.room_id().to_owned(), body.clone())
+            .await
+            .is_none(),
+        "without the recovery key the old message must stay unreadable"
+    );
+
+    encryption::recover(&b, &key)
+        .await
+        .expect("recover with the real key");
+    assert_eq!(encryption::status(&b).await.recovery, Recovery::Enabled);
+    b.encryption()
+        .backups()
+        .download_room_keys_for_room(room.room_id())
+        .await
+        .unwrap();
+    let mut got = None;
+    for _ in 0..20 {
+        sync_a_bit(&b).await;
+        got = read(b.clone(), room.room_id().to_owned(), body.clone()).await;
+        if got.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(
+        got.is_some(),
+        "after recovery the new device reads the old message"
+    );
+}
+
+async fn login_as_with(hs: &str, user: &str, pw: &str, tag: &str) -> Client {
+    login_unsaved(hs, user, pw, &tmp(tag)).await.unwrap().0
+}

@@ -55,7 +55,10 @@ where
     });
     glib::MainContext::default().spawn_local(async move {
         if let Ok(v) = rx.recv().await {
-            on_done(v);
+            // Run the callback from a plain main-loop source, not inside this future:
+            // GLib panics (`EnterError`) if a callback starts a nested main loop,
+            // which `Dialog::run()` does.
+            glib::idle_add_local_once(move || on_done(v));
         }
     });
 }

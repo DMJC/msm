@@ -38,6 +38,13 @@ Appear offline are never changed automatically, a manual choice cancels automati
 Compositors without the protocol (X11 sessions, older compositors): the setting is greyed out and automatic Away is off.
 `MSM_AWAY_SECONDS` overrides the timeout for testing.
 
+## Encryption, recovery and verification
+Rooms created by this client are encrypted. A new device cannot read messages sent before it existed unless the user sets up
+recovery (secret storage + key backup) and enters the recovery key there; verified on Synapse end to end. Setting recovery up first
+bootstraps cross-signing, which the server protects with a password challenge (sent only to the homeserver). The recovery key is shown
+once and never stored by the app. Your own device always counts as locally trusted, so "verified" here means cross-signed.
+Interactive verification of other devices/users is not implemented yet.
+
 ## Group rooms and invitations
 Group rooms are joined rooms with no `m.direct` targets that are not spaces. New rooms are created private (`private_chat` preset)
 and encrypted. Invitations show the inviter and room name; declining uses a normal leave. Room-specific display names come

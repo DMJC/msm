@@ -23,7 +23,8 @@
 - [x] Automatic Away timer (Wayland ext-idle-notify; verified on real Wayfire session)
 - [ ] Contact presence display verified with two users sharing a room
 - [ ] Friend requests
-- [ ] E2EE + verification
+- [x] Cross-signing + recovery key + key backup (verified vs Synapse and in the GUI)
+- [ ] Interactive device verification (SAS), per-message encryption indicators
 - [x] Redaction (delete own message), read receipts, unread counts
 - [ ] Media, reactions, sending edits, search
 - [ ] Integration tests vs local Synapse (partial: login, nickname sync, DM) + Element; full acceptance scenario
@@ -33,3 +34,7 @@
 - [x] Native Wayland (GTK3), StatusNotifierItem tray with status menu
 - [ ] Verify taskbar icon via installed .desktop on the user's panel
 - [ ] Hide-to-tray on window close verified by a real click
+- [ ] Debian .deb package automated builds
+- [ ] Redhat .rpm package automated builds
+- [ ] Microsoft Windows compatible client
+- [ ] Windows arm/x86_64 .exe automated builds.
