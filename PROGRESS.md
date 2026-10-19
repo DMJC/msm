@@ -204,7 +204,7 @@ UI is still a placeholder window.
 - Image previews decode untrusted data with gdk-pixbuf (size-limited, failures ignored); "Open" hands files to the default application, as other clients do.
 - No upload progress / cancel, no thumbnails sent with images, no audio/video playback (they appear as files).
 - Attachments verified against Synapse and this client only (no Element).
-- No interactive device verification (SAS), green ✔ states unverified in GUI.
+- SAS verification is implemented and tested between two msm clients (integration tests); the green ✔ on our own cross-signed device was seen in the GUI, but ✔ on other people's messages/devices has not been.
 - Not implemented: join rules, resetting cross-signing identity, recovery-key reset when this device lacks the secrets.
 - The three-account GUI acceptance scenario has not been run end to end; hide-to-tray via a real close click and the installed .desktop icon are unverified on the user's panel.
 - Contact cache assumes a single account.
