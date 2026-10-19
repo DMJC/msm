@@ -83,4 +83,4 @@ Tested with Element Web 1.12.32 against a local Synapse: DM creation/invite, enc
 Kick, ban, unban and room name/topic use the standard Matrix membership and state events. The UI offers an action only when the room's power levels permit it; the homeserver is the authority. Roles (Member 0, Moderator 50, Admin 100) are changed by updating `m.room.power_levels` users.
 
 ## Not yet implemented
-Power-level editing, room avatars and join rules, QR-code verification, recovery reset/disable, audio/video playback, upload progress and drag-and-drop, server-side message search.
+Custom power-level values, room avatars and join rules, QR-code verification, recovery reset/disable, audio/video playback, upload progress, server-side message search.
