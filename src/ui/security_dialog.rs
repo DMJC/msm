@@ -48,6 +48,10 @@ pub fn open(app: &Rc<App>) {
     let enter = gtk::Button::with_label("Enter recovery key…");
     area.pack_start(&setup, false, false, 0);
     area.pack_start(&enter, false, false, 0);
+    let reset = gtk::Button::with_label("Reset recovery key…");
+    let disable = gtk::Button::with_label("Turn off recovery…");
+    area.pack_start(&reset, false, false, 0);
+    area.pack_start(&disable, false, false, 0);
     let verify_other = gtk::Button::with_label("Verify another device…");
     area.pack_start(&verify_other, false, false, 0);
     {
@@ -62,9 +66,11 @@ pub fn open(app: &Rc<App>) {
     let reload = {
         let (client, summary, devices) = (client.clone(), summary.clone(), devices.clone());
         let (setup, enter) = (setup.clone(), enter.clone());
+        let (reset, disable) = (reset.clone(), disable.clone());
         Rc::new(move || {
             let (c, summary, devices) = (client.clone(), summary.clone(), devices.clone());
             let (setup, enter) = (setup.clone(), enter.clone());
+            let (reset, disable) = (reset.clone(), disable.clone());
             spawn_async(
                 async move {
                     (
@@ -76,6 +82,9 @@ pub fn open(app: &Rc<App>) {
                     // Setting up again would fail (a backup exists); entering a key only helps when one is needed.
                     setup.set_sensitive(st.recovery == encryption::Recovery::Disabled);
                     enter.set_sensitive(st.recovery == encryption::Recovery::Incomplete);
+                    // Changing or deleting the key needs this device to hold the secrets.
+                    reset.set_sensitive(st.recovery == encryption::Recovery::Enabled);
+                    disable.set_sensitive(st.recovery == encryption::Recovery::Enabled);
                     summary.set_markup(&summary_markup(&st));
                     devices.set_markup(&devices_markup(devs.as_deref().unwrap_or(&[])));
                 },
@@ -106,6 +115,56 @@ pub fn open(app: &Rc<App>) {
         );
     });
 
+    let (a, c, r) = (app.clone(), client.clone(), reload.clone());
+    reset.connect_clicked(move |_| {
+        if !confirm(
+            &a,
+            "Replace the recovery key? The old key will stop working, so keep the new one safe.",
+        ) {
+            return;
+        }
+        let (a2, r2, c2) = (a.clone(), r.clone(), c.clone());
+        spawn_async(
+            async move {
+                encryption::reset_recovery_key(&c2)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            move |res| {
+                match res {
+                    Ok(key) => show_recovery_key(&a2, &key),
+                    Err(e) => error_dialog(&a2, &e),
+                }
+                r2();
+            },
+        );
+    });
+
+    let (a, c, r) = (app.clone(), client.clone(), reload.clone());
+    disable.connect_clicked(move |_| {
+        if !confirm(
+            &a,
+            "Turn off recovery? This deletes your recovery key and key backup from the server. \
+             New devices will not be able to read older encrypted messages.",
+        ) {
+            return;
+        }
+        let (a2, r2, c2) = (a.clone(), r.clone(), c.clone());
+        spawn_async(
+            async move {
+                encryption::disable_recovery(&c2)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            move |res| {
+                if let Err(e) = res {
+                    error_dialog(&a2, &e);
+                }
+                r2();
+            },
+        );
+    });
+
     let (a, c, r) = (app.clone(), client, reload);
     enter.connect_clicked(move |_| {
         let Some(key) = prompt_secret(&a, "Recovery key", "Paste your recovery key") else {
@@ -129,6 +188,23 @@ pub fn open(app: &Rc<App>) {
 
     d.connect_response(|d, _| d.close());
     d.show_all();
+}
+
+/// Ask a yes/no question; the destructive answer is never the default.
+fn confirm(app: &Rc<App>, question: &str) -> bool {
+    let d = gtk::MessageDialog::new(
+        Some(&app.window),
+        gtk::DialogFlags::MODAL,
+        gtk::MessageType::Warning,
+        gtk::ButtonsType::None,
+        question,
+    );
+    d.add_button("Cancel", gtk::ResponseType::Cancel);
+    d.add_button("Continue", gtk::ResponseType::Accept);
+    d.set_default_response(gtk::ResponseType::Cancel);
+    let ok = d.run() == gtk::ResponseType::Accept;
+    d.close();
+    ok
 }
 
 fn summary_markup(s: &SecurityStatus) -> String {

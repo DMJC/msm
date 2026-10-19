@@ -141,6 +141,17 @@ pub async fn setup_recovery(client: &Client, password: &str) -> Result<String, S
     enc.recovery().enable().await.map_err(mx)
 }
 
+/// Replace the recovery key (this device must hold the secrets). The old key stops working.
+pub async fn reset_recovery_key(client: &Client) -> Result<String, SecurityError> {
+    client.encryption().recovery().reset_key().await.map_err(mx)
+}
+
+/// Delete secret storage and the key backup from the server. Existing devices keep
+/// their local keys; new devices will no longer be able to read older history.
+pub async fn disable_recovery(client: &Client) -> Result<(), SecurityError> {
+    client.encryption().recovery().disable().await.map_err(mx)
+}
+
 /// Unlock secret storage with a recovery key so this device gets the backup key,
 /// cross-signing keys and can decrypt older history.
 pub async fn recover(client: &Client, recovery_key: &str) -> Result<(), SecurityError> {

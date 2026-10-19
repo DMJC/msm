@@ -607,6 +607,32 @@ async fn recovery_key_lets_a_new_device_read_old_encrypted_history() {
         got.is_some(),
         "after recovery the new device reads the old message"
     );
+
+    // Replacing the key: the old one stops working on a fresh device, the new one works.
+    let new_key = encryption::reset_recovery_key(&b)
+        .await
+        .expect("reset recovery key");
+    assert_ne!(new_key, key);
+    let c = login_as_with(&hs, &name, &pw, "sec-c").await;
+    for _ in 0..3 {
+        sync_a_bit(&c).await;
+    }
+    assert!(
+        encryption::recover(&c, &key).await.is_err(),
+        "the replaced key must not unlock secret storage"
+    );
+    encryption::recover(&c, &new_key)
+        .await
+        .expect("the new key works");
+
+    // Turning recovery off removes it from the server.
+    encryption::disable_recovery(&b).await.expect("disable");
+    assert_eq!(encryption::status(&b).await.recovery, Recovery::Disabled);
+    let d = login_as_with(&hs, &name, &pw, "sec-d").await;
+    for _ in 0..3 {
+        sync_a_bit(&d).await;
+    }
+    assert!(encryption::recover(&d, &new_key).await.is_err());
 }
 
 async fn login_as_with(hs: &str, user: &str, pw: &str, tag: &str) -> Client {

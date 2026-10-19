@@ -192,6 +192,7 @@ UI is still a placeholder window.
 - Full suite after Session 17 changes: 59 unit + 4 bin + 20 integration pass against local Synapse (integration takes about 61 s).
 - Role changes: a "Role" menu (Member/Moderator/Admin) per joined member in Members & settings, shown only when power levels allow (`MemberRow.can_set_role`, `rooms::set_role`). Integration test (promote, moderator limits, demote; non-admin refused) and GUI (promoted and demoted a member, list refreshed) verified. Custom power levels other than 0/50/100 are shown but can't be set.
 - Room picture: "Change picture…" / "Remove picture" in Members & settings, enabled only if we may send `m.room.avatar` (`avatars::set_room_avatar/remove_room_avatar`, `RoomSettings.can_set_avatar`). Integration test (creator sets, member refused, member sees and fetches it, removal) and GUI (picture chosen via the file dialog, shown in the conversation header) verified.
+- Recovery: Security dialog gained "Reset recovery key…" and "Turn off recovery…" (enabled only when recovery is on and this device has the secrets; both confirm first; `encryption::reset_recovery_key/disable_recovery`). Integration test extended and passing (old key rejected and new key accepted on a fresh device; disabling leaves state Disabled and the key useless). The new buttons and confirm dialog were NOT looked at in the GUI (the Security dialog overflows the screen without a window manager in my Xephyr setup).
 - Verification-request unread count: investigated, it is SDK/server behaviour, left as a known problem.
 
 ## Known problems / not verified
@@ -204,7 +205,7 @@ UI is still a placeholder window.
 - No upload progress / cancel, no thumbnails sent with images, no audio/video playback (they appear as files).
 - Attachments verified against Synapse and this client only (no Element).
 - No interactive device verification (SAS), green ✔ states unverified in GUI.
-- Not implemented: power-level editing, room avatar/join rules, recovery reset/disable.
+- Not implemented: join rules, resetting cross-signing identity, recovery-key reset when this device lacks the secrets.
 - The three-account GUI acceptance scenario has not been run end to end; hide-to-tray via a real close click and the installed .desktop icon are unverified on the user's panel.
 - Contact cache assumes a single account.
 
