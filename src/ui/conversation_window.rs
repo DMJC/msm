@@ -93,13 +93,15 @@ impl ConversationWindow {
         root.pack_start(&head, false, false, 0);
         root.pack_start(&encrypted, false, false, 0);
         let is_room = peer.is_none();
-        let (invite_btn, leave_btn) = (
+        let (invite_btn, settings_btn, leave_btn) = (
             gtk::Button::with_label("Invite…"),
+            gtk::Button::with_label("Members & settings…"),
             gtk::Button::with_label("Leave room"),
         );
         if is_room {
             let controls = gtk::Box::new(gtk::Orientation::Horizontal, 4);
             controls.pack_start(&invite_btn, false, false, 0);
+            controls.pack_start(&settings_btn, false, false, 0);
             controls.pack_start(&leave_btn, false, false, 0);
             root.pack_start(&controls, false, false, 0);
         }
@@ -242,6 +244,10 @@ impl ConversationWindow {
                     },
                 );
             }
+        });
+        let c = cw.clone();
+        settings_btn.connect_clicked(move |_| {
+            crate::ui::room_dialog::open(&c.app, c.room.clone());
         });
         let c = cw.clone();
         leave_btn.connect_clicked(move |_| {

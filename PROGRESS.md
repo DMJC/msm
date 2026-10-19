@@ -170,7 +170,13 @@ UI is still a placeholder window.
   - Verified both ways in an encrypted DM: msm-created DM is shown by Element as a direct chat invitation ("wants to chat"), Element decrypts msm's message; msm decrypts Element's messages; Element reply (`m.in_reply_to`) parsed with correct target; Element edit applied (`edited=true`, new text); Element reaction read; msm reply renders with quote in Element, msm reaction shows as a ❤️ pill, msm edit shows "(edited)", msm redaction shows "Message deleted".
   - Observed: every fresh login is a new device and cannot read earlier encrypted history (expected). Element flags msm's messages with a red shield (msm device not cross-signed).
   - Not covered: attachments, avatars, SAS verification and presence against Element; the GTK window itself was not used in this run.
-- Tests: 59 unit + 3 bin + 17 integration pass; clippy/fmt clean.
+- Tests: 59 unit + 3 bin + 18 integration pass; clippy/fmt clean.
+
+## Session 15
+- Room settings and moderation: "Members & settings…" in group room windows (`src/ui/room_dialog.rs`, `rooms::room_settings/kick/ban/unban/set_room_name/set_room_topic`).
+  - Lists joined, invited and banned members with admin/moderator tags; Kick/Ban/Unban buttons appear only if the room's power levels allow us to act on that member (never on ourselves); name/topic fields are disabled without permission. Kick/Ban ask for an optional reason. The server still enforces permissions.
+  - Verified: integration test (creator vs ordinary member permissions, rename/topic reach others, kick, ban, banned can't be re-invited, unban) and GUI (non-admin sees disabled fields and no buttons; admin saved a topic, kicked, banned and unbanned with the list refreshing).
+  - Not done: changing power levels, room avatar, room join rules/visibility, reporting.
 
 ## Known problems / not verified
 - Verification needs both sides to already know each other's keys (e.g. a shared room) and the peer to have accepted the DM. The green ✔ states are not GUI-verified.
@@ -182,9 +188,9 @@ UI is still a placeholder window.
 - No upload progress / cancel, no drag-and-drop or paste-image, no thumbnails sent with images, no audio/video playback (they appear as files).
 - Attachments verified against Synapse and this client only (no Element).
 - No interactive device verification (SAS), green ✔ states unverified in GUI.
-- Not implemented: kick/ban and room settings, recovery reset/disable.
+- Not implemented: power-level editing, room avatar/join rules, recovery reset/disable.
 - The three-account GUI acceptance scenario has not been run end to end; hide-to-tray via a real close click and the installed .desktop icon are unverified on the user's panel.
 - "Load older messages" can show when nothing older exists. Contact cache assumes a single account.
 
 ## Exact next task
-1. Remaining interop checks vs Element (attachments, avatars, SAS verification, presence); optional three-account GUI run; kick/ban and room settings.
+1. Remaining interop checks vs Element (attachments, avatars, SAS verification, presence); optional three-account GUI run.

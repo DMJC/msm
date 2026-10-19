@@ -79,6 +79,8 @@ Tested with Element Web 1.12.32 against a local Synapse: DM creation/invite, enc
 - Friendship is only recorded as mutual after a verifiable acknowledgement. Third-party clients never answer, so their users stay plain contacts (`Outgoing` until they answer, which they cannot).
 - To-device events reach only the devices the recipient has when sent.
 
+## Room moderation
+Kick, ban, unban and room name/topic use the standard Matrix membership and state events. The UI offers an action only when the room's power levels permit it; the homeserver is the authority.
+
 ## Not yet implemented
-Friend requests, device verification UI, media, edits sent from this client,
-reactions, kick/ban and room settings.
+Power-level editing, room avatars and join rules, QR-code verification, recovery reset/disable, audio/video playback, upload progress and drag-and-drop, server-side message search.

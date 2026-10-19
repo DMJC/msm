@@ -1183,3 +1183,76 @@ async fn three_accounts_in_a_group_keep_independent_nicknames() {
         );
     }
 }
+
+#[tokio::test]
+async fn kick_ban_unban_and_room_settings_respect_power_levels() {
+    use msm::matrix::rooms::MemberState;
+    let Some(hs) = homeserver() else { return };
+    let (alice, _, _) = register_fresh(&hs).await;
+    let (bob, _, _) = register_fresh(&hs).await;
+    let (carol, _, _) = register_fresh(&hs).await;
+    let id = |c: &Client| c.user_id().unwrap().to_string();
+    let (b, c) = (id(&bob), id(&carol));
+    let room = rooms::create_group(&alice, "Moderated", &[b.clone(), c.clone()])
+        .await
+        .unwrap();
+    for cl in [&bob, &carol] {
+        for _ in 0..10 {
+            sync_a_bit(cl).await;
+            if let Some(i) = rooms::pending_invites(cl).await.into_iter().next() {
+                rooms::accept_invite(cl, &i.room_id).await.unwrap();
+                break;
+            }
+        }
+    }
+    sync_a_bit(&alice).await;
+    sync_a_bit(&bob).await;
+
+    // The creator may moderate and edit; an ordinary member may not.
+    let s = rooms::room_settings(&room).await.unwrap();
+    assert!(s.can_rename && s.can_set_topic);
+    let row = |s: &rooms::RoomSettings, m: &str| s.members.iter().find(|r| r.mxid == m).cloned();
+    let carol_row = row(&s, &c).unwrap();
+    assert!(carol_row.can_kick && carol_row.can_ban);
+    assert!(
+        !row(&s, &id(&alice)).unwrap().can_kick,
+        "never offered on ourselves"
+    );
+    let broom = bob.get_room(room.room_id()).unwrap();
+    let bs = rooms::room_settings(&broom).await.unwrap();
+    assert!(!bs.can_rename);
+    assert!(row(&bs, &c).is_some_and(|r| !r.can_kick && !r.can_ban));
+    assert!(rooms::kick(&broom, &c, "").await.is_err());
+    assert!(rooms::set_room_name(&broom, "hijack").await.is_err());
+
+    // Name and topic changes reach the other members.
+    assert!(rooms::set_room_name(&room, "  ").await.is_err());
+    rooms::set_room_name(&room, "Renamed").await.unwrap();
+    rooms::set_room_topic(&room, "About things").await.unwrap();
+    sync_a_bit(&bob).await;
+    let bs = rooms::room_settings(&broom).await.unwrap();
+    assert_eq!(bs.name.as_deref(), Some("Renamed"));
+    assert_eq!(bs.topic.as_deref(), Some("About things"));
+
+    // Kick: carol is out but may be invited back.
+    rooms::kick(&room, &c, "tidying").await.unwrap();
+    sync_a_bit(&alice).await;
+    let s = rooms::room_settings(&room).await.unwrap();
+    assert!(row(&s, &c).is_none(), "kicked members are not listed");
+
+    // Ban: bob is listed as banned and offered an unban, not a kick.
+    rooms::ban(&room, &b, "spam").await.unwrap();
+    sync_a_bit(&alice).await;
+    let s = rooms::room_settings(&room).await.unwrap();
+    let br = row(&s, &b).unwrap();
+    assert_eq!(br.membership, MemberState::Banned);
+    assert!(br.can_unban && !br.can_kick && !br.can_ban);
+    // A banned user cannot be invited back until unbanned.
+    assert!(rooms::invite_user(&room, &b).await.is_err());
+
+    rooms::unban(&room, &b).await.unwrap();
+    sync_a_bit(&alice).await;
+    let s = rooms::room_settings(&room).await.unwrap();
+    assert!(row(&s, &b).is_none());
+    rooms::invite_user(&room, &b).await.unwrap();
+}

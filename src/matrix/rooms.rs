@@ -202,6 +202,116 @@ pub async fn member_names(room: &Room) -> Result<Vec<(String, Option<String>)>, 
         .collect())
 }
 
+/// One row of the member-management list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberRow {
+    pub mxid: String,
+    pub display: Option<String>,
+    pub membership: MemberState,
+    pub power: i64,
+    /// What *we* may do to this member under the room's power levels.
+    pub can_kick: bool,
+    pub can_ban: bool,
+    pub can_unban: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemberState {
+    Joined,
+    Invited,
+    Banned,
+}
+
+/// Settings and members of a room, as far as we may change them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoomSettings {
+    pub name: Option<String>,
+    pub topic: Option<String>,
+    pub can_rename: bool,
+    pub can_set_topic: bool,
+    pub members: Vec<MemberRow>,
+}
+
+pub async fn room_settings(room: &Room) -> Result<RoomSettings, RoomError> {
+    use matrix_sdk::ruma::events::StateEventType;
+    let me = room.own_user_id().to_owned();
+    let pl = room.power_levels().await.map_err(mx)?;
+    let mut members = Vec::new();
+    for m in room.members(RoomMemberships::all()).await.map_err(mx)? {
+        let membership = match m.membership() {
+            MembershipState::Join => MemberState::Joined,
+            MembershipState::Invite => MemberState::Invited,
+            MembershipState::Ban => MemberState::Banned,
+            _ => continue,
+        };
+        let target = m.user_id();
+        let is_me = target == me;
+        let banned = membership == MemberState::Banned;
+        members.push(MemberRow {
+            mxid: target.to_string(),
+            display: m.display_name().map(str::to_owned),
+            membership,
+            power: match pl.for_user(target) {
+                matrix_sdk::ruma::events::room::power_levels::UserPowerLevel::Int(i) => {
+                    i64::from(i)
+                }
+                _ => i64::MAX,
+            },
+            can_kick: !is_me && !banned && pl.user_can_kick_user(&me, target),
+            can_ban: !is_me && !banned && pl.user_can_ban_user(&me, target),
+            can_unban: banned && pl.user_can_unban_user(&me, target),
+        });
+    }
+    members.sort_by(|a, b| {
+        (a.membership as u8, std::cmp::Reverse(a.power), &a.mxid).cmp(&(
+            b.membership as u8,
+            std::cmp::Reverse(b.power),
+            &b.mxid,
+        ))
+    });
+    Ok(RoomSettings {
+        name: room.name(),
+        topic: room.topic(),
+        can_rename: pl.user_can_send_state(&me, StateEventType::RoomName),
+        can_set_topic: pl.user_can_send_state(&me, StateEventType::RoomTopic),
+        members,
+    })
+}
+
+fn reason(r: &str) -> Option<&str> {
+    let r = r.trim();
+    (!r.is_empty()).then_some(r)
+}
+
+pub async fn kick(room: &Room, mxid: &str, why: &str) -> Result<(), RoomError> {
+    let uid = <&UserId>::try_from(mxid).map_err(|_| RoomError::InvalidUser(mxid.to_owned()))?;
+    room.kick_user(uid, reason(why)).await.map_err(mx)
+}
+
+pub async fn ban(room: &Room, mxid: &str, why: &str) -> Result<(), RoomError> {
+    let uid = <&UserId>::try_from(mxid).map_err(|_| RoomError::InvalidUser(mxid.to_owned()))?;
+    room.ban_user(uid, reason(why)).await.map_err(mx)
+}
+
+pub async fn unban(room: &Room, mxid: &str) -> Result<(), RoomError> {
+    let uid = <&UserId>::try_from(mxid).map_err(|_| RoomError::InvalidUser(mxid.to_owned()))?;
+    room.unban_user(uid, None).await.map_err(mx)
+}
+
+pub async fn set_room_name(room: &Room, name: &str) -> Result<(), RoomError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(RoomError::Matrix("the room name must not be empty".into()));
+    }
+    room.set_name(name.to_owned()).await.map_err(mx)?;
+    Ok(())
+}
+
+pub async fn set_room_topic(room: &Room, topic: &str) -> Result<(), RoomError> {
+    room.set_room_topic(topic.trim()).await.map_err(mx)?;
+    Ok(())
+}
+
 pub struct History {
     /// Oldest-first.
     pub events: Vec<Parsed>,
