@@ -26,7 +26,7 @@
 - [ ] Friend requests
 - [x] Cross-signing + recovery key + key backup (verified vs Synapse and in the GUI)
 - [x] Interactive emoji (SAS) verification (verified vs Synapse + GUI)
-- [ ] Per-message encryption indicators, verified badges
+- [x] Per-message encryption indicators, verified badges (⚠ path GUI-verified; ✔ path not)
 - [x] Redaction (delete own message), read receipts, unread counts
 - [x] Reactions, sending edits, emoji picker (verified vs Synapse + GUI)
 - [x] File/image attachments (encrypted round trip verified; GUI verified)

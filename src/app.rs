@@ -91,6 +91,8 @@ pub struct App {
     avatar_pending: RefCell<HashSet<String>>,
     /// Bumped whenever an avatar arrives, so views know to redraw.
     pub avatar_gen: Cell<u32>,
+    /// Contacts whose cross-signing identity we have verified.
+    pub verified_users: RefCell<HashSet<String>>,
 }
 
 impl App {
@@ -142,6 +144,7 @@ impl App {
             avatars: RefCell::new(HashMap::new()),
             avatar_pending: RefCell::new(HashSet::new()),
             avatar_gen: Cell::new(0),
+            verified_users: RefCell::new(HashSet::new()),
         })
     }
 
@@ -174,6 +177,7 @@ impl App {
                 match ev {
                     SyncEvent::Connected => app.set_status("Connected"),
                     SyncEvent::Synced => {
+                        app.refresh_trust();
                         app.refresh_invites();
                         ui::main_window::refresh(&app);
                     }
@@ -562,6 +566,43 @@ impl App {
                 app.avatars.borrow_mut().insert(k, pb);
                 app.avatar_gen.set(app.avatar_gen.get() + 1);
                 app.refresh();
+            },
+        );
+    }
+
+    /// Recompute which contacts (and we) are verified; redraws if that changed.
+    pub fn refresh_trust(self: &Rc<Self>) {
+        let Some(client) = self.client.borrow().clone() else {
+            return;
+        };
+        let ids: Vec<String> = self
+            .mgr
+            .borrow()
+            .list()
+            .iter()
+            .map(|c| c.mxid.clone())
+            .collect();
+        let app = self.clone();
+        spawn_async(
+            async move {
+                let mut out = HashSet::new();
+                for id in ids {
+                    let Ok(uid) = UserId::parse(&id) else {
+                        continue;
+                    };
+                    if let Ok(Some(identity)) = client.encryption().get_user_identity(&uid).await
+                        && identity.is_verified()
+                    {
+                        out.insert(id);
+                    }
+                }
+                out
+            },
+            move |set| {
+                if *app.verified_users.borrow() != set {
+                    *app.verified_users.borrow_mut() = set;
+                    app.refresh();
+                }
             },
         );
     }

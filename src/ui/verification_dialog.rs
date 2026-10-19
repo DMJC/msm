@@ -96,6 +96,7 @@ pub fn open(app: &Rc<App>, flow: Flow) {
         glib::Propagation::Proceed
     });
 
+    let app = app.clone();
     glib::MainContext::default().spawn_local(async move {
         while let Some(state) = ui.recv().await {
             for b in [&accept, &matches, &differ] {
@@ -132,6 +133,11 @@ pub fn open(app: &Rc<App>, flow: Flow) {
                 VerifyUi::Confirmed => status.set_text("Waiting for the other side to confirm…"),
                 VerifyUi::Done => {
                     status.set_text("✅ Verified.");
+                    // Trust is recorded just after Done; look again shortly.
+                    let app = app.clone();
+                    glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
+                        app.refresh_trust()
+                    });
                     cancel.set_label("Close");
                     cancel.connect_clicked({
                         let w = window.clone();

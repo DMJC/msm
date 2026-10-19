@@ -672,6 +672,11 @@ async fn edits_and_reactions_between_two_users() {
         .expect("message");
     assert_eq!(m.body, "the original");
     assert!(m.edited);
+    assert_ne!(
+        m.trust,
+        msm::matrix::messages::Trust::Unencrypted,
+        "decrypted messages carry their trust level"
+    );
 
     // Reactions: grouped, attributed, removable.
     let r1 = rooms::send_reaction(&broom, &id, "👍").await.unwrap();

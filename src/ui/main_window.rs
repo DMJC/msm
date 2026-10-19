@@ -318,6 +318,7 @@ fn view_signature(app: &Rc<App>, query: &str) -> String {
             app.unread_for(&c.mxid),
             pres.get(&c.mxid)
         );
+        let _ = writeln!(sig, "v|{}", app.verified_users.borrow().contains(&c.mxid));
     }
     for i in app.invites.borrow().iter() {
         let who = i
@@ -485,10 +486,15 @@ fn contact_row(app: &Rc<App>, c: &Contact) -> gtk::Widget {
     let l = gtk::Label::new(None);
     l.set_xalign(0.0);
     l.set_markup(&format!(
-        "{}{}{}{}",
+        "{}{}{}{}{}",
         presence_dot(presence),
         if c.favorite { "★ " } else { "" },
         gtk::glib::markup_escape_text(&display),
+        if app.verified_users.borrow().contains(&c.mxid) {
+            " <span foreground='#2a9d3f'>✔</span>"
+        } else {
+            ""
+        },
         if unread > 0 {
             format!("  <b><span foreground='#d33'>({unread})</span></b>")
         } else {

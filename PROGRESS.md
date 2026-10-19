@@ -148,8 +148,17 @@ UI is still a placeholder window.
     and the GUI (nested X server): contact > Verify..., emoji identical to the second client's log, "Verified." after both confirmed.
 - Tests: 54 unit + 3 bin + 15 integration pass; clippy/fmt clean.
 
+## Session 13
+- Per-message encryption indicators and verified badges.
+  - `ChatMessage.trust` (`Unencrypted` / `Verified` / `Unverified`) from the SDK's `EncryptionInfo` for history and live events; a message's marker is ✔ (sent from a verified device),
+    ⚠ (encrypted, sending device not verified), nothing for unencrypted; tooltip explains. Local echo adopts the trust of the server copy.
+  - Contacts verified by us show ✔ in the list and "✔ verified" in the DM header (`App::refresh_trust` on each sync and after a verification completes).
+  - Verified: unit test (echo adopts trust), integration assertion (decrypted messages carry a trust level), GUI: ⚠ on fresh messages from this (uncross-signed) device.
+  - Not verified in the GUI: the green ✔ states (a verified contact / verified device) because the test device lacks cross-signing keys (needs recovery key entry on that device).
+- Tests: 54 unit + 3 bin + 15 integration pass; clippy/fmt clean.
+
 ## Known problems / not verified
-- Verification needs both sides to already know each other's keys (e.g. a shared room) and the peer to have accepted the DM; the app does not yet show a trust badge for verified users and has no per-message encryption indicators or verified badges.
+- Verification needs both sides to already know each other's keys (e.g. a shared room) and the peer to have accepted the DM. The green ✔ states are not GUI-verified.
 - The verification-request message in the DM counts as an unread message.
 - QR-code verification and verifying with a recovery key from a new device UI are not implemented.
 - Search covers only messages already loaded (no server-side search); replies to unloaded messages show "an earlier message"; no jump-to-original.
@@ -157,11 +166,10 @@ UI is still a placeholder window.
 - Image previews decode untrusted data with gdk-pixbuf (size-limited, failures ignored); "Open" hands files to the default application, as other clients do.
 - No upload progress / cancel, no drag-and-drop or paste-image, no thumbnails sent with images, no audio/video playback (they appear as files).
 - Attachments verified against Synapse and this client only (no Element).
-- No interactive device verification (SAS), no per-message encryption indicators or verified badges.
+- No interactive device verification (SAS), green ✔ states unverified in GUI.
 - Not implemented: friend requests, kick/ban and room settings, recovery reset/disable.
 - The three-account GUI acceptance scenario has not been run end to end; hide-to-tray via a real close click and the installed .desktop icon are unverified on the user's panel.
 - "Load older messages" can show when nothing older exists. Contact cache assumes a single account.
 
 ## Exact next task
-1. Per-message encryption indicators and a verified badge on contacts/devices (use SDK encryption info).
-2. Friend requests; third-party interop test (Element Web vs local Synapse); three-account acceptance scenario.
+1. Friend requests; third-party interop test (Element Web vs local Synapse); three-account acceptance scenario.

@@ -114,6 +114,7 @@ pub struct ChatMessage {
     pub attachment: Option<Attachment>,
     /// Event ID this message replies to (`m.in_reply_to`).
     pub reply_to: Option<String>,
+    pub trust: Trust,
 }
 
 impl ChatMessage {
@@ -156,6 +157,39 @@ impl ChatMessage {
         } else {
             line
         }
+    }
+}
+
+/// How much to trust where a message came from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Trust {
+    /// Not end-to-end encrypted (plain room, or locally generated).
+    #[default]
+    Unencrypted,
+    /// Decrypted, sent from a device of a user we have verified.
+    Verified,
+    /// Decrypted, but the sending device is not verified.
+    Unverified,
+}
+
+impl Trust {
+    pub fn from_info(info: Option<&matrix_sdk::deserialized_responses::EncryptionInfo>) -> Self {
+        use matrix_sdk::deserialized_responses::VerificationState;
+        match info.map(|i| &i.verification_state) {
+            None => Trust::Unencrypted,
+            Some(VerificationState::Verified) => Trust::Verified,
+            Some(VerificationState::Unverified(_)) => Trust::Unverified,
+        }
+    }
+}
+
+impl Parsed {
+    /// Attach what we know about how the event was encrypted.
+    pub fn with_trust(mut self, trust: Trust) -> Self {
+        if let Parsed::Message(m) = &mut self {
+            m.trust = trust;
+        }
+        self
     }
 }
 
@@ -234,7 +268,11 @@ impl Conversation {
     /// Insert a message from the server (live or history). Duplicates are ignored;
     /// a remote echo of our own pending message replaces the local one.
     pub fn insert(&mut self, mut m: ChatMessage) {
-        if self.index.contains_key(&m.id) {
+        if let Some(&i) = self.index.get(&m.id) {
+            // Our own echo is shown before the server copy arrives; adopt its trust level.
+            if m.trust != Trust::Unencrypted {
+                self.messages[i].trust = m.trust;
+            }
             return;
         }
         if let Some(txn) = m.txn_id.clone()
@@ -285,6 +323,7 @@ impl Conversation {
             delivery: Delivery::Pending,
             attachment: None,
             reply_to: reply_to.map(str::to_owned),
+            trust: Trust::Unencrypted,
         });
     }
 
@@ -456,6 +495,7 @@ pub fn parse_event(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
                     Some(Relation::Reply(r)) => Some(r.in_reply_to.event_id.to_string()),
                     _ => None,
                 },
+                trust: Trust::Unencrypted,
             }))
         }
         AnySyncMessageLikeEvent::RoomEncrypted(SyncMessageLikeEvent::Redacted(e)) => {
@@ -471,6 +511,7 @@ pub fn parse_event(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
                 delivery: Delivery::Sent,
                 attachment: None,
                 reply_to: None,
+                trust: Trust::Unencrypted,
             }))
         }
         AnySyncMessageLikeEvent::RoomMessage(SyncMessageLikeEvent::Redacted(e)) => {
@@ -486,6 +527,7 @@ pub fn parse_event(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
                 delivery: Delivery::Sent,
                 attachment: None,
                 reply_to: None,
+                trust: Trust::Unencrypted,
             }))
         }
         AnySyncMessageLikeEvent::RoomEncrypted(SyncMessageLikeEvent::Original(e)) => {
@@ -501,6 +543,7 @@ pub fn parse_event(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
                 delivery: Delivery::Sent,
                 attachment: None,
                 reply_to: None,
+                trust: Trust::Unencrypted,
             }))
         }
         AnySyncMessageLikeEvent::Reaction(SyncMessageLikeEvent::Original(e)) => {
@@ -548,6 +591,7 @@ fn parse_redacted_fallback(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
         delivery: Delivery::Sent,
         attachment: None,
         reply_to: None,
+        trust: Trust::Unencrypted,
     }))
 }
 
@@ -573,6 +617,7 @@ mod tests {
             delivery: Delivery::Sent,
             attachment: None,
             reply_to: None,
+            trust: Trust::Unencrypted,
         }
     }
 
@@ -668,6 +713,13 @@ mod tests {
         }
         let mut c = Conversation::default();
         c.add_pending("t1", "@me:x", "re", 5, Some("$1"));
+        assert_eq!(Trust::from_info(None), Trust::Unencrypted);
+        c.mark_sent("t1", "$1");
+        let mut echo = msg("$1", 5, "re");
+        echo.trust = Trust::Unverified;
+        c.insert(echo);
+        assert_eq!(c.find("$1").unwrap().trust, Trust::Unverified);
+        assert_eq!(c.messages().len(), 1);
         assert_eq!(c.find("t1").unwrap().reply_to.as_deref(), Some("$1"));
         assert!(c.find("nope").is_none());
     }

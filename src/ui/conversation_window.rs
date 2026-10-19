@@ -12,7 +12,7 @@ use matrix_sdk::Room;
 use matrix_sdk::ruma::OwnedTransactionId;
 use msm::matrix::media;
 use msm::matrix::messages::{
-    Attachment, AttachmentKind, ChatMessage, Conversation, Delivery, Parsed, Reaction,
+    Attachment, AttachmentKind, ChatMessage, Conversation, Delivery, Parsed, Reaction, Trust,
 };
 use msm::matrix::rooms;
 
@@ -361,8 +361,14 @@ impl ConversationWindow {
         };
         self.avatar.set_from_pixbuf(Some(&self.app.avatar(&key)));
         self.window.set_title(&name);
+        let badge = match &self.peer {
+            Some(p) if self.app.verified_users.borrow().contains(p) => {
+                " <span foreground='#2a9d3f'>✔ verified</span>"
+            }
+            _ => "",
+        };
         self.title.set_markup(&format!(
-            "<b>{}</b>  <small>{}</small>",
+            "<b>{}</b>{badge}  <small>{}</small>",
             glib::markup_escape_text(&name),
             glib::markup_escape_text(&sub)
         ));
@@ -681,10 +687,24 @@ impl ConversationWindow {
             ""
         };
         let label = gtk::Label::new(None);
+        let (shield, why) = match m.trust {
+            Trust::Verified => (
+                " <span foreground='#2a9d3f'>✔</span>",
+                "End-to-end encrypted, sent from a device you have verified",
+            ),
+            Trust::Unverified => (
+                " <span foreground='#c77700'>⚠</span>",
+                "End-to-end encrypted, but the sending device is not verified",
+            ),
+            Trust::Unencrypted => ("", ""),
+        };
         label.set_markup(&format!(
-            "<small>{time}</small> <b>{}</b>: {text}{edited}{mark}",
+            "<small>{time}</small> <b>{}</b>{shield}: {text}{edited}{mark}",
             glib::markup_escape_text(&name)
         ));
+        if !why.is_empty() {
+            label.set_tooltip_text(Some(why));
+        }
         label.set_xalign(0.0);
         label.set_line_wrap(true);
         label.set_selectable(true);

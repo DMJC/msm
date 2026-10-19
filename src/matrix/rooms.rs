@@ -25,7 +25,7 @@ use matrix_sdk::ruma::{OwnedTransactionId, UserId};
 use matrix_sdk::{Client, Room};
 use thiserror::Error;
 
-use super::messages::{Parsed, parse_event};
+use super::messages::{Parsed, Trust, parse_event};
 use super::presence::{ContactPresence, from_wire};
 
 #[derive(Debug, Error)]
@@ -228,6 +228,7 @@ pub async fn load_history(
 
 fn parse_timeline_event(ev: &TimelineEvent) -> Option<Parsed> {
     parse_event(ev.raw())
+        .map(|p| p.with_trust(Trust::from_info(ev.encryption_info().map(|a| &**a))))
 }
 
 /// Send plain text. Re-sending with the same `txn_id` is idempotent on the
@@ -314,19 +315,25 @@ pub enum LiveEvent {
 /// Register handlers that forward live room events to `tx`.
 pub fn forward_live_events(client: &Client, tx: async_channel::Sender<LiveEvent>) {
     let t = tx.clone();
-    client.add_event_handler(move |raw: Raw<AnySyncTimelineEvent>, room: Room| {
-        let t = t.clone();
-        async move {
-            if let Some(event) = parse_event(&raw) {
-                let _ = t
-                    .send(LiveEvent::Timeline {
-                        room_id: room.room_id().to_string(),
-                        event: Box::new(event),
-                    })
-                    .await;
+    client.add_event_handler(
+        move |raw: Raw<AnySyncTimelineEvent>,
+              room: Room,
+              info: Option<matrix_sdk::deserialized_responses::EncryptionInfo>| {
+            let t = t.clone();
+            async move {
+                if let Some(event) =
+                    parse_event(&raw).map(|p| p.with_trust(Trust::from_info(info.as_ref())))
+                {
+                    let _ = t
+                        .send(LiveEvent::Timeline {
+                            room_id: room.room_id().to_string(),
+                            event: Box::new(event),
+                        })
+                        .await;
+                }
             }
-        }
-    });
+        },
+    );
     let ttx = tx.clone();
     client.add_event_handler(move |ev: SyncTypingEvent, room: Room| {
         let tx = ttx.clone();
