@@ -138,8 +138,8 @@ fn wins(a: &Contact, b: &Contact) -> bool {
     if a.deleted != b.deleted {
         return a.deleted;
     }
-    let ka = (&a.nickname, &a.group, a.favorite);
-    let kb = (&b.nickname, &b.group, b.favorite);
+    let ka = (&a.nickname, &a.group, a.favorite, a.friendship);
+    let kb = (&b.nickname, &b.group, b.favorite, b.friendship);
     ka > kb
 }
 

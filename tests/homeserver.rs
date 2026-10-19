@@ -1000,3 +1000,76 @@ async fn emoji_mismatch_cancels_without_verifying() {
         .unwrap();
     assert!(!id.is_verified());
 }
+
+#[tokio::test]
+async fn friend_request_accept_and_remove_between_two_users() {
+    use msm::contacts::contact::Friendship;
+    use msm::contacts::contact_manager::{ContactManager, FriendAction};
+    use msm::matrix::friendship;
+    let Some(hs) = homeserver() else { return };
+    let (alice, _, _) = register_fresh(&hs).await;
+    let (bob, _, _) = register_fresh(&hs).await;
+    let (aid, bid) = (
+        alice.user_id().unwrap().to_string(),
+        bob.user_id().unwrap().to_string(),
+    );
+    let (atx, arx) = async_channel::unbounded();
+    let (btx, brx) = async_channel::unbounded();
+    friendship::watch(&alice, atx);
+    friendship::watch(&bob, btx);
+    for c in [&alice, &bob] {
+        let c = c.clone();
+        tokio::spawn(async move {
+            let _ = c.sync(SyncSettings::default()).await;
+        });
+    }
+    let recv = |rx: &async_channel::Receiver<(String, FriendAction)>| {
+        let rx = rx.clone();
+        async move {
+            tokio::time::timeout(Duration::from_secs(30), rx.recv())
+                .await
+                .expect("friend event not delivered")
+                .unwrap()
+        }
+    };
+
+    let (mut am, mut bm) = (ContactManager::default(), ContactManager::default());
+    let act = am.request_friend(&bid, 1).unwrap();
+    friendship::send(&alice, &bid, act).await.unwrap();
+    assert_eq!(am.friendship(&bid), Friendship::Outgoing);
+
+    let (from, action) = recv(&brx).await;
+    assert_eq!(
+        (from.as_str(), action),
+        (aid.as_str(), FriendAction::Request)
+    );
+    assert_eq!(bm.apply_friend_event(&from, action, 2), None);
+    assert_eq!(bm.friendship(&aid), Friendship::Incoming);
+    // A friend request must not look like a room invitation to anyone.
+    assert!(bob.invited_rooms().is_empty());
+    assert!(bob.rooms().is_empty());
+
+    bm.accept_friend(&aid, 3).unwrap();
+    friendship::send(&bob, &aid, FriendAction::Accept)
+        .await
+        .unwrap();
+    let (from, action) = recv(&arx).await;
+    assert_eq!(
+        (from.as_str(), action),
+        (bid.as_str(), FriendAction::Accept)
+    );
+    am.apply_friend_event(&from, action, 4);
+    assert_eq!(am.friendship(&bid), Friendship::Friends);
+    assert_eq!(bm.friendship(&aid), Friendship::Friends);
+
+    // Removal reaches the other side.
+    am.end_friendship(&bid, 5).unwrap();
+    friendship::send(&alice, &bid, FriendAction::Remove)
+        .await
+        .unwrap();
+    let (from, action) = recv(&brx).await;
+    bm.apply_friend_event(&from, action, 6);
+    assert_eq!(bm.friendship(&aid), Friendship::None);
+    // The contact itself survives: friendship is separate from having a contact.
+    assert!(bm.get(&aid).is_some());
+}

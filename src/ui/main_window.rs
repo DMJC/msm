@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use gtk::prelude::*;
-use msm::contacts::contact::Contact;
+use msm::contacts::contact::{Contact, Friendship};
 use msm::icon::status_rgb;
 use msm::matrix::presence::{ContactPresence, UiStatus};
 
@@ -283,7 +283,12 @@ pub fn refresh(app: &Rc<App>) {
         ui.list.remove(&child);
     }
     let mgr = app.mgr.borrow();
-    let matches: Vec<Contact> = mgr.search(&query).into_iter().cloned().collect();
+    let all: Vec<Contact> = mgr.search(&query).into_iter().cloned().collect();
+    // Unanswered friend requests get their own section, not a group.
+    let (requests, matches): (Vec<Contact>, Vec<Contact>) = all
+        .into_iter()
+        .partition(|c| c.friendship == Friendship::Incoming);
+    add_friend_requests(app, &ui.list, &requests);
     add_invites(app, &ui.list);
     let favourites: Vec<&Contact> = matches.iter().filter(|c| c.favorite).collect();
     if !favourites.is_empty() {
@@ -310,13 +315,14 @@ fn view_signature(app: &Rc<App>, query: &str) -> String {
     for c in mgr.search(query) {
         let _ = writeln!(
             sig,
-            "c|{}|{}|{}|{}|{}|{:?}",
+            "c|{}|{}|{}|{}|{}|{:?}|{:?}",
             c.mxid,
             mgr.resolver().resolve(&c.mxid, None),
             c.group,
             c.favorite,
             app.unread_for(&c.mxid),
-            pres.get(&c.mxid)
+            pres.get(&c.mxid),
+            c.friendship
         );
         let _ = writeln!(sig, "v|{}", app.verified_users.borrow().contains(&c.mxid));
     }
@@ -339,6 +345,42 @@ fn view_signature(app: &Rc<App>, query: &str) -> String {
         }
     }
     sig
+}
+
+fn add_friend_requests(app: &Rc<App>, list: &gtk::Box, requests: &[Contact]) {
+    if requests.is_empty() {
+        return;
+    }
+    let exp = gtk::Expander::new(Some(&format!("Friend requests ({})", requests.len())));
+    exp.set_expanded(true);
+    let inner = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    for c in requests {
+        let who = app.mgr.borrow().resolver().resolve(&c.mxid, None);
+        let label = gtk::Label::new(None);
+        label.set_xalign(0.0);
+        label.set_line_wrap(true);
+        label.set_markup(&format!(
+            "<b>{}</b>\n<small>{} wants to add you as a friend</small>",
+            gtk::glib::markup_escape_text(&who),
+            gtk::glib::markup_escape_text(&c.mxid)
+        ));
+        let row = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        row.set_margin_start(16);
+        row.pack_start(&label, false, false, 0);
+        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let yes = gtk::Button::with_label("Accept");
+        let no = gtk::Button::with_label("Decline");
+        let (a, id) = (app.clone(), c.mxid.clone());
+        yes.connect_clicked(move |_| a.answer_friend_request(&id, true));
+        let (a, id) = (app.clone(), c.mxid.clone());
+        no.connect_clicked(move |_| a.answer_friend_request(&id, false));
+        buttons.pack_start(&yes, false, false, 0);
+        buttons.pack_start(&no, false, false, 0);
+        row.pack_start(&buttons, false, false, 0);
+        inner.pack_start(&row, false, false, 0);
+    }
+    exp.add(&inner);
+    list.pack_start(&exp, false, false, 0);
 }
 
 fn add_invites(app: &Rc<App>, list: &gtk::Box) {
@@ -486,7 +528,7 @@ fn contact_row(app: &Rc<App>, c: &Contact) -> gtk::Widget {
     let l = gtk::Label::new(None);
     l.set_xalign(0.0);
     l.set_markup(&format!(
-        "{}{}{}{}{}",
+        "{}{}{}{}{}{}",
         presence_dot(presence),
         if c.favorite { "★ " } else { "" },
         gtk::glib::markup_escape_text(&display),
@@ -494,6 +536,11 @@ fn contact_row(app: &Rc<App>, c: &Contact) -> gtk::Widget {
             " <span foreground='#2a9d3f'>✔</span>"
         } else {
             ""
+        },
+        match c.friendship {
+            Friendship::Outgoing => " <small><i>(request sent)</i></small>",
+            Friendship::Friends => " <small>👥</small>",
+            _ => "",
         },
         if unread > 0 {
             format!("  <b><span foreground='#d33'>({unread})</span></b>")
@@ -586,6 +633,26 @@ fn contact_menu(app: &Rc<App>, mxid: &str) -> gtk::Menu {
 
     let (a, id) = (app.clone(), mxid.to_owned());
     menu.append(&item("Send message", move || a.open_conversation(&id)));
+    let friendship = app.mgr.borrow().friendship(mxid);
+    let (a, id) = (app.clone(), mxid.to_owned());
+    match friendship {
+        Friendship::None => menu.append(&item("Send friend request", move || {
+            a.send_friend_request(&id)
+        })),
+        Friendship::Outgoing => {
+            let (a2, id2) = (a.clone(), id.clone());
+            menu.append(&item("Resend friend request", move || {
+                a2.send_friend_request(&id2)
+            }));
+            menu.append(&item("Cancel friend request", move || {
+                a.end_friendship(&id)
+            }));
+        }
+        Friendship::Friends => {
+            menu.append(&item("Remove friendship", move || a.end_friendship(&id)))
+        }
+        Friendship::Incoming => {}
+    }
     let (a, id) = (app.clone(), mxid.to_owned());
     menu.append(&item("Verify…", move || {
         crate::ui::verification_dialog::start(&a, &id)

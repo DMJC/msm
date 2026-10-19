@@ -3,7 +3,7 @@
 
 use thiserror::Error;
 
-use super::contact::{Contact, is_valid_mxid};
+use super::contact::{Contact, Friendship, is_valid_mxid};
 use super::nickname_resolver::NameResolver;
 use super::synchronization::ContactsDocument;
 
@@ -19,6 +19,36 @@ pub enum ContactError {
     GroupNotFound(String),
     #[error("group name must not be empty")]
     EmptyGroupName,
+}
+
+/// The friendship messages exchanged between two installations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FriendAction {
+    Request,
+    Accept,
+    Reject,
+    Remove,
+}
+
+impl FriendAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Request => "request",
+            Self::Accept => "accept",
+            Self::Reject => "reject",
+            Self::Remove => "remove",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "request" => Self::Request,
+            "accept" => Self::Accept,
+            "reject" => Self::Reject,
+            "remove" => Self::Remove,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug, Default)]
@@ -207,6 +237,116 @@ impl ContactManager {
         Ok(())
     }
 
+    pub fn friendship(&self, mxid: &str) -> Friendship {
+        self.get(mxid).map_or(Friendship::None, |c| c.friendship)
+    }
+
+    /// Live contacts with an unanswered incoming friend request.
+    pub fn incoming_requests(&self) -> Vec<&Contact> {
+        self.doc
+            .live()
+            .filter(|c| c.friendship == Friendship::Incoming)
+            .collect()
+    }
+
+    fn set_friendship(&mut self, mxid: &str, f: Friendship, now: u64) -> Result<(), ContactError> {
+        let c = self.live_mut(mxid)?;
+        c.friendship = f;
+        c.updated_at = bump(c.updated_at, now);
+        Ok(())
+    }
+
+    /// We ask `mxid` to be friends (adding them as a contact if needed).
+    /// Returns the action to send. If they had already asked us, this is an accept.
+    pub fn request_friend(&mut self, mxid: &str, now: u64) -> Result<FriendAction, ContactError> {
+        self.add(mxid, now)?;
+        match self.friendship(mxid) {
+            Friendship::Incoming | Friendship::Friends => {
+                self.set_friendship(mxid, Friendship::Friends, now)?;
+                Ok(FriendAction::Accept)
+            }
+            _ => {
+                self.set_friendship(mxid, Friendship::Outgoing, now)?;
+                Ok(FriendAction::Request)
+            }
+        }
+    }
+
+    /// Accept their pending request.
+    pub fn accept_friend(&mut self, mxid: &str, now: u64) -> Result<(), ContactError> {
+        if self.friendship(mxid) != Friendship::Incoming {
+            return Err(ContactError::NotFound(mxid.to_owned()));
+        }
+        self.set_friendship(mxid, Friendship::Friends, now)
+    }
+
+    /// Decline their pending request. A contact that only exists because of the
+    /// request (nothing customised) is dropped.
+    pub fn reject_friend(&mut self, mxid: &str, now: u64) -> Result<(), ContactError> {
+        if self.friendship(mxid) != Friendship::Incoming {
+            return Err(ContactError::NotFound(mxid.to_owned()));
+        }
+        let pristine = self
+            .get(mxid)
+            .is_some_and(|c| c.nickname.is_none() && !c.favorite && c.group == "Other");
+        if pristine {
+            self.remove(mxid, now)
+        } else {
+            self.set_friendship(mxid, Friendship::None, now)
+        }
+    }
+
+    /// End a friendship or withdraw our pending request; the contact stays.
+    pub fn end_friendship(&mut self, mxid: &str, now: u64) -> Result<(), ContactError> {
+        self.set_friendship(mxid, Friendship::None, now)
+    }
+
+    /// Apply a friend message received from `mxid`. Returns an action to send
+    /// back, if one is due. Acceptance only counts if we actually asked.
+    pub fn apply_friend_event(
+        &mut self,
+        mxid: &str,
+        action: FriendAction,
+        now: u64,
+    ) -> Option<FriendAction> {
+        use FriendAction as A;
+        use Friendship as F;
+        let state = self.friendship(mxid);
+        match (action, state) {
+            (A::Request, F::Outgoing) | (A::Request, F::Friends) => {
+                // Crossed requests, or they lost track of an existing friendship.
+                self.set_friendship(mxid, F::Friends, now).ok()?;
+                Some(A::Accept)
+            }
+            (A::Request, F::None) => {
+                if !is_valid_mxid(mxid) {
+                    return None;
+                }
+                self.add(mxid, now).ok()?;
+                self.set_friendship(mxid, F::Incoming, now).ok()?;
+                None
+            }
+            (A::Accept, F::Outgoing) => {
+                self.set_friendship(mxid, F::Friends, now).ok()?;
+                None
+            }
+            (A::Reject, F::Outgoing) => {
+                self.set_friendship(mxid, F::None, now).ok()?;
+                None
+            }
+            (A::Remove, F::Friends | F::Outgoing) => {
+                self.set_friendship(mxid, F::None, now).ok()?;
+                None
+            }
+            (A::Remove, F::Incoming) => {
+                // They withdrew before we answered.
+                let _ = self.reject_friend(mxid, now);
+                None
+            }
+            _ => None,
+        }
+    }
+
     fn group_idx(&self, name: &str) -> Result<usize, ContactError> {
         self.doc
             .groups
@@ -312,5 +452,68 @@ mod tests {
         gone.remove(U, 20).unwrap();
         a.apply_remote(gone.document());
         assert_eq!(a.resolver().resolve(U, None), U);
+    }
+
+    #[test]
+    fn friend_request_needs_their_accept() {
+        let mut m = ContactManager::default();
+        assert_eq!(m.request_friend(U, 1).unwrap(), FriendAction::Request);
+        assert_eq!(m.friendship(U), Friendship::Outgoing);
+        // Unsolicited accepts from strangers prove nothing.
+        assert_eq!(m.apply_friend_event("@x:y", FriendAction::Accept, 2), None);
+        assert_eq!(m.friendship("@x:y"), Friendship::None);
+        m.apply_friend_event(U, FriendAction::Accept, 3);
+        assert_eq!(m.friendship(U), Friendship::Friends);
+    }
+
+    #[test]
+    fn incoming_request_accept_reject_and_cancel() {
+        let mut m = ContactManager::default();
+        assert_eq!(m.apply_friend_event(U, FriendAction::Request, 1), None);
+        assert_eq!(m.incoming_requests().len(), 1);
+        m.accept_friend(U, 2).unwrap();
+        assert_eq!(m.friendship(U), Friendship::Friends);
+
+        // A request from a stranger that we decline leaves no contact behind.
+        m.apply_friend_event("@s:y", FriendAction::Request, 3);
+        m.reject_friend("@s:y", 4).unwrap();
+        assert!(m.get("@s:y").is_none());
+
+        // Declining a request from an existing, customised contact keeps them.
+        m.set_nickname(U, Some("J"), 5).unwrap();
+        m.end_friendship(U, 6).unwrap();
+        m.apply_friend_event(U, FriendAction::Request, 7);
+        m.reject_friend(U, 8).unwrap();
+        assert_eq!(m.friendship(U), Friendship::None);
+        assert!(m.get(U).is_some());
+
+        // Withdrawn before answering.
+        m.apply_friend_event("@w:y", FriendAction::Request, 9);
+        m.apply_friend_event("@w:y", FriendAction::Remove, 10);
+        assert!(m.get("@w:y").is_none());
+    }
+
+    #[test]
+    fn crossed_requests_become_friends_and_ack() {
+        let mut m = ContactManager::default();
+        m.request_friend(U, 1).unwrap();
+        assert_eq!(
+            m.apply_friend_event(U, FriendAction::Request, 2),
+            Some(FriendAction::Accept)
+        );
+        assert_eq!(m.friendship(U), Friendship::Friends);
+    }
+
+    #[test]
+    fn reject_and_remove_clear_outgoing_and_friends() {
+        let mut m = ContactManager::default();
+        m.request_friend(U, 1).unwrap();
+        m.apply_friend_event(U, FriendAction::Reject, 2);
+        assert_eq!(m.friendship(U), Friendship::None);
+        m.request_friend(U, 3).unwrap();
+        m.apply_friend_event(U, FriendAction::Accept, 4);
+        m.apply_friend_event(U, FriendAction::Remove, 5);
+        assert_eq!(m.friendship(U), Friendship::None);
+        assert!(m.get(U).is_some());
     }
 }

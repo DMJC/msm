@@ -18,4 +18,6 @@ pub const MIGRATIONS: &[&str] = &[
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
      );",
+    // 2: application-level friendship state
+    "ALTER TABLE contacts ADD COLUMN friendship TEXT NOT NULL DEFAULT 'none';",
 ];

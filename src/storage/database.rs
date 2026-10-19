@@ -9,7 +9,7 @@ use rusqlite::{Connection, params};
 use thiserror::Error;
 
 use super::migrations::MIGRATIONS;
-use crate::contacts::contact::Contact;
+use crate::contacts::contact::{Contact, Friendship};
 use crate::contacts::synchronization::ContactsDocument;
 
 #[derive(Debug, Error)]
@@ -93,8 +93,8 @@ impl Database {
         }
         for ct in doc.contacts.values() {
             tx.execute(
-                "INSERT INTO contacts (mxid, nickname, grp, favorite, updated_at, deleted) VALUES (?1,?2,?3,?4,?5,?6)",
-                params![ct.mxid, ct.nickname, ct.group, ct.favorite, ct.updated_at as i64, ct.deleted],
+                "INSERT INTO contacts (mxid, nickname, grp, favorite, updated_at, deleted, friendship) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+                params![ct.mxid, ct.nickname, ct.group, ct.favorite, ct.updated_at as i64, ct.deleted, ct.friendship.as_str()],
             )?;
         }
         tx.commit()?;
@@ -112,13 +112,14 @@ impl Database {
             doc.groups = groups;
         }
         let rows = c
-            .prepare("SELECT mxid, nickname, grp, favorite, updated_at, deleted FROM contacts")?
+            .prepare("SELECT mxid, nickname, grp, favorite, updated_at, deleted, friendship FROM contacts")?
             .query_map([], |r| {
                 Ok(Contact {
                     mxid: r.get(0)?,
                     nickname: r.get(1)?,
                     group: r.get(2)?,
                     favorite: r.get(3)?,
+                    friendship: Friendship::parse(&r.get::<_, String>(6)?),
                     updated_at: r.get::<_, i64>(4)? as u64,
                     deleted: r.get(5)?,
                 })
@@ -168,6 +169,7 @@ mod tests {
             let mut c = Contact::new("@u:x", 7);
             c.nickname = Some("日本語".into());
             c.favorite = true;
+            c.friendship = Friendship::Outgoing;
             doc.contacts.insert("@u:x".into(), c);
             doc.groups.push("Gamers".into());
             db.save_contacts(&doc).unwrap();
@@ -179,6 +181,7 @@ mod tests {
         let doc = db.load_contacts().unwrap();
         assert_eq!(doc.contacts["@u:x"].nickname.as_deref(), Some("日本語"));
         assert!(doc.contacts["@u:x"].favorite);
+        assert_eq!(doc.contacts["@u:x"].friendship, Friendship::Outgoing);
         assert_eq!(doc.groups.last().unwrap(), "Gamers");
         assert_eq!(
             db.get_setting("away_minutes").unwrap().as_deref(),

@@ -157,6 +157,16 @@ UI is still a placeholder window.
   - Not verified in the GUI: the green ✔ states (a verified contact / verified device) because the test device lacks cross-signing keys (needs recovery key entry on that device).
 - Tests: 54 unit + 3 bin + 15 integration pass; clippy/fmt clean.
 
+## Session 14
+- Friend requests (application-level, separate from room invitations).
+  - Transport: custom to-device event `com.matrixmessenger.friend.v1` `{action: request|accept|reject|remove}` (`src/matrix/friendship.rs`). No room or invite is created; other clients ignore it. The homeserver sets the sender.
+  - State: `Contact.friendship` (`None`/`Outgoing`/`Incoming`/`Friends`), synced in the contacts account data and cached in SQLite (migration 2). `Friends` is only reached by their accept of our request, or our accept of their request (crossed requests also resolve to Friends and are acknowledged). Unsolicited accepts are ignored.
+  - UI: "Friend requests" section with Accept/Decline; contact menu (send/resend/cancel request, remove friendship); "(request sent)" and 👥 markers; status line + desktop notification on incoming. Adding a contact never requires friendship.
+  - Declining a request from someone who is only a contact because of the request drops the contact; an existing customised contact is kept.
+  - Verified: 4 manager unit tests + parse test, integration test (request, accept, remove across two real accounts; no room/invite created), GUI (bob's request showed in the section, Accept turned it into 👥 and bob received the accept).
+  - Limits: to-device messages reach only the recipient's devices that exist at send time (a device added later doesn't see an old request; "Resend friend request" covers it); the sender's side cannot tell a request was never delivered (no read ack).
+- Tests: 62 unit + 3 bin + 16 integration pass; clippy/fmt clean.
+
 ## Known problems / not verified
 - Verification needs both sides to already know each other's keys (e.g. a shared room) and the peer to have accepted the DM. The green ✔ states are not GUI-verified.
 - The verification-request message in the DM counts as an unread message.
@@ -167,9 +177,9 @@ UI is still a placeholder window.
 - No upload progress / cancel, no drag-and-drop or paste-image, no thumbnails sent with images, no audio/video playback (they appear as files).
 - Attachments verified against Synapse and this client only (no Element).
 - No interactive device verification (SAS), green ✔ states unverified in GUI.
-- Not implemented: friend requests, kick/ban and room settings, recovery reset/disable.
+- Not implemented: kick/ban and room settings, recovery reset/disable.
 - The three-account GUI acceptance scenario has not been run end to end; hide-to-tray via a real close click and the installed .desktop icon are unverified on the user's panel.
 - "Load older messages" can show when nothing older exists. Contact cache assumes a single account.
 
 ## Exact next task
-1. Friend requests; third-party interop test (Element Web vs local Synapse); three-account acceptance scenario.
+1. Third-party interop test (Element Web vs local Synapse); three-account acceptance scenario.

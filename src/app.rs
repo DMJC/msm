@@ -14,7 +14,8 @@ use ksni::TrayMethods;
 use matrix_sdk::Client;
 use matrix_sdk::ruma::UserId;
 use matrix_sdk::ruma::api::client::profile::DisplayName;
-use msm::contacts::contact_manager::ContactManager;
+use msm::contacts::contact::Friendship;
+use msm::contacts::contact_manager::{ContactManager, FriendAction};
 use msm::matrix::messages::Parsed;
 use msm::matrix::presence::{self, ContactPresence, UiStatus};
 use msm::matrix::rooms::{self, LiveEvent};
@@ -217,6 +218,16 @@ impl App {
                     async move { msm::matrix::verification::run(req) },
                     move |flow| ui::verification_dialog::open(&app, flow),
                 );
+            }
+        });
+
+        // Friend requests and answers from other installations of this app.
+        let (ftx, frx) = async_channel::unbounded();
+        msm::matrix::friendship::watch(&client, ftx);
+        let app = self.clone();
+        glib::MainContext::default().spawn_local(async move {
+            while let Ok((from, action)) = frx.recv().await {
+                app.on_friend_event(&from, action);
             }
         });
 
@@ -788,6 +799,100 @@ impl App {
                 }
             },
         );
+    }
+
+    /// Send a friendship message in the background; the local state change has
+    /// already been made, so a failure only needs reporting.
+    fn send_friend_action(self: &Rc<Self>, mxid: &str, action: FriendAction) {
+        let Some(client) = self.client.borrow().clone() else {
+            return;
+        };
+        let (app, id) = (self.clone(), mxid.to_owned());
+        let target = id.clone();
+        spawn_async(
+            async move {
+                msm::matrix::friendship::send(&client, &target, action)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            move |res| {
+                if let Err(e) = res {
+                    app.set_status(&format!("Could not reach {id}: {e}"));
+                }
+            },
+        );
+    }
+
+    /// Ask `mxid` to be friends (adds them as a contact if needed).
+    pub fn send_friend_request(self: &Rc<Self>, mxid: &str) {
+        let res = self.mgr.borrow_mut().request_friend(mxid, now_ms());
+        match res {
+            Ok(action) => {
+                self.persist_and_sync();
+                self.refresh();
+                self.send_friend_action(mxid, action);
+            }
+            Err(e) => self.set_status(&format!("Could not send friend request: {e}")),
+        }
+    }
+
+    /// Answer an incoming request.
+    pub fn answer_friend_request(self: &Rc<Self>, mxid: &str, accept: bool) {
+        let res = if accept {
+            self.mgr.borrow_mut().accept_friend(mxid, now_ms())
+        } else {
+            self.mgr.borrow_mut().reject_friend(mxid, now_ms())
+        };
+        if res.is_ok() {
+            self.persist_and_sync();
+            self.refresh();
+            let action = if accept {
+                FriendAction::Accept
+            } else {
+                FriendAction::Reject
+            };
+            self.send_friend_action(mxid, action);
+        }
+    }
+
+    /// End a friendship or withdraw a pending request; the contact stays.
+    pub fn end_friendship(self: &Rc<Self>, mxid: &str) {
+        if self.mgr.borrow_mut().end_friendship(mxid, now_ms()).is_ok() {
+            self.persist_and_sync();
+            self.refresh();
+            self.send_friend_action(mxid, FriendAction::Remove);
+        }
+    }
+
+    fn on_friend_event(self: &Rc<Self>, from: &str, action: FriendAction) {
+        let before = self.mgr.borrow().friendship(from);
+        let reply = self
+            .mgr
+            .borrow_mut()
+            .apply_friend_event(from, action, now_ms());
+        let after = self.mgr.borrow().friendship(from);
+        if before == after && reply.is_none() {
+            return;
+        }
+        self.persist_and_sync();
+        self.refresh();
+        let who = self.mgr.borrow().resolver().resolve(from, None);
+        match (before, after) {
+            (_, Friendship::Incoming) => {
+                self.set_status(&format!("{who} sent you a friend request"));
+                self.notify("friend-request", &who, "wants to add you as a friend");
+            }
+            (Friendship::Outgoing, Friendship::Friends) => {
+                self.set_status(&format!("{who} accepted your friend request"));
+            }
+            (Friendship::Outgoing, Friendship::None) => {
+                self.set_status(&format!("{who} declined your friend request"));
+            }
+            _ => {}
+        }
+        if let Some(r) = reply {
+            self.send_friend_action(from, r);
+        }
     }
 
     pub fn answer_invite(self: &Rc<Self>, room_id: &str, accept: bool) {

@@ -23,7 +23,7 @@
 - [x] Own status + tray + presence publishing (verified vs Synapse and on Wayland/MATE panel)
 - [x] Automatic Away timer (Wayland ext-idle-notify; verified on real Wayfire session)
 - [ ] Contact presence display verified with two users sharing a room
-- [ ] Friend requests
+- [x] Friend requests (to-device protocol; verified vs Synapse + GUI; not vs a second client implementation)
 - [x] Cross-signing + recovery key + key backup (verified vs Synapse and in the GUI)
 - [x] Interactive emoji (SAS) verification (verified vs Synapse + GUI)
 - [x] Per-message encryption indicators, verified badges (⚠ path GUI-verified; ✔ path not)
