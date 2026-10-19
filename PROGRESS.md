@@ -65,17 +65,30 @@ UI is still a placeholder window.
   the displayed data changes (`view_signature`).
 - Tests: 40 unit + 9 integration pass; clippy and fmt clean.
 
+## Session 6
+- Automatic Away:
+  - `matrix::presence::AutoAway` (pure, unit-tested): only Online users go Away; manual choices cancel it; activity restores Online only if Away was automatic.
+  - `idle.rs`: Wayland `ext-idle-notify-v1` on a background thread (own connection, respects idle inhibitors); greyed-out setting when unsupported.
+  - UI: "Away after N min idle (0 = off)" spin button; persisted (`away_minutes`, default 10); `MSM_AWAY_SECONDS` testing override.
+  - Verified on the user's real Wayfire session: app logged `Idle` then `Resumed` events, tray tooltip went Online -> Away -> Online and the
+    server presence followed. Idle event logging added (status changes made manually are also logged).
+- Unresolved oddity: in one earlier run the tray tooltip showed Away -> Busy -> Online within ~8 s with no code path that sets Busy
+  automatically; most likely the user clicking the tray menu, but not proven. A later run with logging showed no manual changes and no anomaly.
+- Tests: 42 unit + 9 integration (integration last run before this feature; the feature touches only the app crate and presence.rs) ;
+  clippy/fmt clean.
+
 ## Known problems / not verified
-- Not tested against Element or other third-party clients. Two-device encrypted history (a new device cannot read older messages) is expected Matrix behaviour; no key backup / verification UI exists yet.
-- Group nickname display (Alice's and Bob's independent nicknames in one room) is covered by resolver unit tests and the contact-sync integration test, not yet by a three-account GUI run (final acceptance scenario).
+- Not tested against Element or other third-party clients; no device verification/key-backup UI.
+- The three-account GUI acceptance scenario (independent nicknames in a group) has not been run end to end.
 - "Load older messages" can show when nothing older exists.
-- Hide-to-tray via an actual window-close click and the installed .desktop taskbar icon are not verified on the user's panel.
-- Not implemented: automatic Away timer, friend requests, media/file transfer, reactions, sending edits, in-conversation search, avatars, device verification, room membership management beyond invite/leave (kick/ban, power levels), room topic/name editing.
+- Hide-to-tray via a real window-close click and the installed .desktop taskbar icon are unverified on the user's panel.
+- Not implemented: friend requests, media/file transfer, reactions, sending edits, in-conversation search, avatars, device verification,
+  kick/ban and room settings, settings dialog (settings are inline in the main window).
+- Idle detection needs a Wayland compositor with ext-idle-notify-v1 (Wayfire has it); X11 sessions have no automatic Away.
 - Contact cache assumes a single account. Unread counts sum all DMs with a contact.
-- Synapse for tests: pip venv (`scripts/test-homeserver.sh <dir>`); stopped at end of session.
 
 ## Exact next task
-1. Automatic Away on inactivity (configurable timer; needs an idle source that works on Wayland, e.g. the session screensaver/idle D-Bus API, falling back to in-app activity) feeding `App::set_my_presence`; restore previous status on activity.
-2. Device verification + key backup/recovery UI (Phase 8), then encryption status indicators per message.
-3. Media/file attachments, reactions, sending edits (Phase 9).
-4. Third-party interop test (Element Web or another client against the local Synapse) and the three-account acceptance scenario.
+1. Device verification + key backup/recovery UI and encryption status indicators (Phase 8).
+2. Media/file attachments, avatars, reactions, sending edits, in-conversation search (Phase 9).
+3. Friend requests (app-specific protocol over private data, clearly separate from invites).
+4. Third-party interop test (Element Web against local Synapse) and the three-account acceptance scenario.

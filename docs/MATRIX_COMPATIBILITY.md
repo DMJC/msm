@@ -31,6 +31,13 @@ Implementation notes (found by testing on Synapse):
 - The presence PUT can take many seconds; it runs off the sync loop, after one quick sync, in order.
 - Synapse may take ~10-20 s to reflect a change.
 
+## Automatic Away
+Idle time comes from the Wayland `ext-idle-notify-v1` protocol (own connection on a background thread; respects idle inhibitors, so
+playing a video is not "away"). After the configured number of idle minutes an *Online* user is shown as Away; Busy, Away and
+Appear offline are never changed automatically, a manual choice cancels automatic Away, and activity restores Online.
+Compositors without the protocol (X11 sessions, older compositors): the setting is greyed out and automatic Away is off.
+`MSM_AWAY_SECONDS` overrides the timeout for testing.
+
 ## Group rooms and invitations
 Group rooms are joined rooms with no `m.direct` targets that are not spaces. New rooms are created private (`private_chat` preset)
 and encrypted. Invitations show the inviter and room name; declining uses a normal leave. Room-specific display names come
@@ -38,5 +45,5 @@ from member state events and rank below local nicknames and above global profile
 Verified on Synapse: create/invite/accept/decline/leave, history, encrypted messages between members.
 
 ## Not yet implemented
-Automatic Away on inactivity, friend requests, device verification UI, media, edits sent from this client,
+Friend requests, device verification UI, media, edits sent from this client,
 reactions, kick/ban and room settings.

@@ -1,4 +1,5 @@
 mod app;
+mod idle;
 mod tray;
 mod ui;
 
@@ -51,6 +52,7 @@ fn activate(gtk_app: &gtk::Application) {
 
     let state = app::App::new(window.clone(), stack.clone(), db);
     state.start_tray();
+    state.start_idle_monitor();
     let s = state.clone();
     window.connect_delete_event(move |_, _| {
         if s.hide_to_tray() {

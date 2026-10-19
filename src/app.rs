@@ -71,7 +71,10 @@ pub struct App {
     pub main_ui: RefCell<Option<ui::main_window::MainUi>>,
     pub conversations: RefCell<HashMap<String, Rc<ui::conversation_window::ConversationWindow>>>,
     /// Our own chosen status (see `msm::matrix::presence` for the wire mapping).
-    pub presence: Cell<UiStatus>,
+    pub presence: RefCell<presence::AutoAway>,
+    pub idle: RefCell<Option<crate::idle::IdleHandle>>,
+    /// Minutes of inactivity before automatic Away (0 = off).
+    pub away_minutes: Cell<u32>,
     pub presence_msg: RefCell<String>,
     /// Wire presence for the sync loop (see `matrix::synchronization::run`).
     pub presence_tx: tokio::sync::watch::Sender<presence::Desired>,
@@ -102,6 +105,12 @@ impl App {
             .ok()
             .flatten()
             .unwrap_or_default();
+        let away_minutes = db
+            .get_setting("away_minutes")
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10);
         let (presence_tx, _) =
             tokio::sync::watch::channel(presence::Desired::new(presence, &presence_msg));
         Rc::new(Self {
@@ -114,7 +123,9 @@ impl App {
             login_ui: RefCell::new(None),
             main_ui: RefCell::new(None),
             conversations: RefCell::new(HashMap::new()),
-            presence: Cell::new(presence),
+            presence: RefCell::new(presence::AutoAway::new(presence)),
+            idle: RefCell::new(None),
+            away_minutes: Cell::new(away_minutes),
             presence_msg: RefCell::new(presence_msg),
             presence_tx,
             tray: RefCell::new(None),
@@ -203,28 +214,96 @@ impl App {
         self.fetch_profile_names();
     }
 
-    /// Change our own status; persists, updates the tray/window icon and tells the server.
-    pub fn set_my_presence(self: &Rc<Self>, state: UiStatus, message: Option<String>) {
-        self.presence.set(state);
+    /// The status shown and published (manual choice, or Away while automatically away).
+    pub fn effective_presence(&self) -> UiStatus {
+        self.presence.borrow().effective()
+    }
+
+    /// Change our own status. `state` is a manual choice (cancels automatic Away);
+    /// `None` keeps the current one, e.g. when only the message changed.
+    pub fn set_my_presence(self: &Rc<Self>, state: Option<UiStatus>, message: Option<String>) {
+        if let Some(s) = state {
+            tracing::info!("status chosen manually: {}", s.key());
+            self.presence.borrow_mut().set_manual(s);
+        }
         if let Some(m) = message {
             *self.presence_msg.borrow_mut() = m;
         }
-        // The sync loop picks this up and publishes it to the homeserver.
-        self.presence_tx
-            .send_replace(presence::Desired::new(state, &self.presence_msg.borrow()));
-        let _ = self.db.set_setting("presence", state.key());
+        let _ = self
+            .db
+            .set_setting("presence", self.presence.borrow().manual().key());
         let _ = self
             .db
             .set_setting("presence_msg", &self.presence_msg.borrow());
+        self.presence_changed();
+    }
+
+    /// Push the effective status to the sync loop, tray, icon and selector.
+    fn presence_changed(self: &Rc<Self>) {
+        // The sync loop picks this up and publishes it to the homeserver.
+        self.presence_tx.send_replace(presence::Desired::new(
+            self.effective_presence(),
+            &self.presence_msg.borrow(),
+        ));
         ui::main_window::sync_presence_controls(self);
         self.update_window_icon();
         self.update_tray();
     }
 
+    /// Start idle detection for automatic Away.
+    pub fn start_idle_monitor(self: &Rc<Self>) {
+        let (tx, rx) = async_channel::unbounded();
+        let handle = crate::idle::start(tx);
+        *self.idle.borrow_mut() = Some(handle);
+        self.apply_away_timeout();
+        let app = self.clone();
+        glib::MainContext::default().spawn_local(async move {
+            use crate::idle::IdleEvent;
+            while let Ok(ev) = rx.recv().await {
+                tracing::info!("idle event: {ev:?}");
+                let changed = match ev {
+                    IdleEvent::Idle => app.presence.borrow_mut().idle(),
+                    IdleEvent::Resumed => app.presence.borrow_mut().resume(),
+                    IdleEvent::Unavailable(_) => {
+                        ui::main_window::set_auto_away_available(&app, false);
+                        false
+                    }
+                };
+                if changed {
+                    app.presence_changed();
+                }
+            }
+        });
+    }
+
+    /// Set the inactivity limit in minutes (0 disables automatic Away).
+    pub fn set_away_minutes(self: &Rc<Self>, minutes: u32) {
+        self.away_minutes.set(minutes);
+        let _ = self.db.set_setting("away_minutes", &minutes.to_string());
+        self.apply_away_timeout();
+        if minutes == 0 && self.presence.borrow_mut().resume() {
+            self.presence_changed();
+        }
+    }
+
+    fn apply_away_timeout(&self) {
+        // MSM_AWAY_SECONDS is a testing override.
+        let secs = std::env::var("MSM_AWAY_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .or_else(|| {
+                (self.away_minutes.get() > 0).then(|| u64::from(self.away_minutes.get()) * 60)
+            });
+        if let Some(h) = self.idle.borrow().as_ref() {
+            h.set_timeout(secs.map(std::time::Duration::from_secs));
+        }
+    }
+
     fn update_window_icon(&self) {
         use gtk::gdk_pixbuf::{Colorspace, Pixbuf};
         const SIZE: usize = 64;
-        let bytes = glib::Bytes::from_owned(msm::icon::status_icon_rgba(self.presence.get(), SIZE));
+        let bytes =
+            glib::Bytes::from_owned(msm::icon::status_icon_rgba(self.effective_presence(), SIZE));
         let pb = Pixbuf::from_bytes(
             &bytes,
             Colorspace::Rgb,
@@ -242,7 +321,7 @@ impl App {
         let Some(h) = self.tray.borrow().clone() else {
             return;
         };
-        let (status, visible) = (self.presence.get(), self.window.is_visible());
+        let (status, visible) = (self.effective_presence(), self.window.is_visible());
         runtime().spawn(async move {
             h.update(|t| {
                 t.status = status;
@@ -264,7 +343,7 @@ impl App {
             }
         });
         let tray = MsmTray {
-            status: self.presence.get(),
+            status: self.effective_presence(),
             window_visible: self.window.is_visible(),
             tx,
         };
@@ -284,7 +363,7 @@ impl App {
 
     fn on_tray_command(self: &Rc<Self>, cmd: TrayCommand) {
         match cmd {
-            TrayCommand::SetStatus(s) => self.set_my_presence(s, None),
+            TrayCommand::SetStatus(s) => self.set_my_presence(Some(s), None),
             TrayCommand::ToggleWindow => {
                 self.toggle_window();
             }

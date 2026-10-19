@@ -15,6 +15,7 @@ pub struct MainUi {
     list: gtk::Box,
     combo: gtk::ComboBoxText,
     msg_entry: gtk::Entry,
+    away_row: gtk::Box,
     updating: std::cell::Cell<bool>,
     /// What the list currently shows; unchanged views are not rebuilt, because
     /// destroying rows mid-click would swallow double-clicks.
@@ -55,12 +56,27 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     for st in UiStatus::ALL {
         combo.append(Some(st.key()), st.label());
     }
-    combo.set_active_id(Some(app.presence.get().key()));
+    combo.set_active_id(Some(app.effective_presence().key()));
     let msg_entry = gtk::Entry::new();
     msg_entry.set_placeholder_text(Some("Set a status message"));
     msg_entry.set_text(&app.presence_msg.borrow());
     root.pack_start(&combo, false, false, 0);
     root.pack_start(&msg_entry, false, false, 0);
+
+    let away_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let away_spin = gtk::SpinButton::with_range(0.0, 240.0, 1.0);
+    away_spin.set_value(f64::from(app.away_minutes.get()));
+    away_row.pack_start(&gtk::Label::new(Some("Away after")), false, false, 0);
+    away_row.pack_start(&away_spin, false, false, 0);
+    away_row.pack_start(
+        &gtk::Label::new(Some("min idle (0 = off)")),
+        false,
+        false,
+        0,
+    );
+    root.pack_start(&away_row, false, false, 0);
+    let a = app.clone();
+    away_spin.connect_value_changed(move |s| a.set_away_minutes(s.value() as u32));
 
     let a = app.clone();
     combo.connect_changed(move |c| {
@@ -73,12 +89,12 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
             return;
         }
         if let Some(st) = c.active_id().and_then(|id| UiStatus::from_key(&id)) {
-            a.set_my_presence(st, None);
+            a.set_my_presence(Some(st), None);
         }
     });
     let a = app.clone();
     msg_entry.connect_activate(move |e| {
-        a.set_my_presence(a.presence.get(), Some(e.text().to_string()));
+        a.set_my_presence(None, Some(e.text().to_string()));
     });
 
     let search = gtk::SearchEntry::new();
@@ -167,17 +183,29 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         list,
         combo,
         msg_entry,
+        away_row,
         updating: std::cell::Cell::new(false),
         last_view: std::cell::RefCell::new(String::new()),
     });
     root.upcast()
 }
 
+/// Grey out the automatic-Away setting when the compositor cannot report idleness.
+pub fn set_auto_away_available(app: &Rc<App>, available: bool) {
+    if let Some(m) = app.main_ui.borrow().as_ref() {
+        m.away_row.set_sensitive(available);
+        m.away_row.set_tooltip_text(
+            (!available)
+                .then_some("Automatic Away needs a Wayland compositor with idle notifications"),
+        );
+    }
+}
+
 /// Reflect `app.presence` in the selector without re-triggering its handlers.
 pub fn sync_presence_controls(app: &Rc<App>) {
     if let Some(m) = app.main_ui.borrow().as_ref() {
         m.updating.set(true);
-        m.combo.set_active_id(Some(app.presence.get().key()));
+        m.combo.set_active_id(Some(app.effective_presence().key()));
         if m.msg_entry.text().as_str() != app.presence_msg.borrow().as_str() {
             m.msg_entry.set_text(&app.presence_msg.borrow());
         }

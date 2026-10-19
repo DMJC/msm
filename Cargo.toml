@@ -9,6 +9,7 @@ directories = "6.0.0"
 getrandom = "0.4.3"
 gtk = "0.19"
 ksni = "0.3.6"
+libc = "0.2.191"
 matrix-sdk = "0.19"
 oo7 = { version = "0.6.0", default-features = false, features = ["tokio", "native_crypto"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
@@ -19,6 +20,8 @@ tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "sync", "
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 url = "2.5.8"
+wayland-client = "0.31.15"
+wayland-protocols = { version = "0.32.13", features = ["client", "staging"] }
 
 [dev-dependencies]
 async-channel = "2.5.0"

@@ -119,6 +119,63 @@ pub fn from_wire(
     }
 }
 
+/// The user's chosen status plus automatic-Away bookkeeping.
+///
+/// Rules: only an *Online* user is moved to Away when idle (someone who chose
+/// Busy, Away or Appear offline meant it); any manual choice cancels automatic
+/// Away; activity restores Online only if Away was automatic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AutoAway {
+    manual: UiStatus,
+    auto: bool,
+}
+
+impl AutoAway {
+    pub fn new(manual: UiStatus) -> Self {
+        Self {
+            manual,
+            auto: false,
+        }
+    }
+
+    /// What should be published and displayed.
+    pub fn effective(&self) -> UiStatus {
+        if self.auto {
+            UiStatus::Away
+        } else {
+            self.manual
+        }
+    }
+
+    /// The user's own choice (what is persisted).
+    pub fn manual(&self) -> UiStatus {
+        self.manual
+    }
+
+    pub fn is_auto(&self) -> bool {
+        self.auto
+    }
+
+    pub fn set_manual(&mut self, s: UiStatus) {
+        self.manual = s;
+        self.auto = false;
+    }
+
+    /// The user went idle. Returns whether the effective status changed.
+    pub fn idle(&mut self) -> bool {
+        if self.manual == UiStatus::Online && !self.auto {
+            self.auto = true;
+            return true;
+        }
+        false
+    }
+
+    /// The user is active again. Returns whether the effective status changed.
+    pub fn resume(&mut self) -> bool {
+        std::mem::take(&mut self.auto)
+    }
+}
+
 /// The status (and message) we want the homeserver to show for us.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Desired {
@@ -219,5 +276,42 @@ mod tests {
             assert_eq!(UiStatus::ALL[s.index()], s);
         }
         assert_eq!(UiStatus::from_key("nope"), None);
+    }
+
+    #[test]
+    fn auto_away_only_affects_online_users() {
+        for manual in [UiStatus::Away, UiStatus::Busy, UiStatus::Offline] {
+            let mut a = AutoAway::new(manual);
+            assert!(!a.idle(), "{manual:?} must not change when idle");
+            assert_eq!(a.effective(), manual);
+            assert!(!a.resume());
+            assert_eq!(a.effective(), manual);
+        }
+        let mut a = AutoAway::new(UiStatus::Online);
+        assert!(a.idle());
+        assert_eq!(a.effective(), UiStatus::Away);
+        assert_eq!(a.manual(), UiStatus::Online);
+        assert!(!a.idle(), "second idle is a no-op");
+        assert!(a.resume());
+        assert_eq!(a.effective(), UiStatus::Online);
+        assert!(!a.resume(), "resume without auto-away is a no-op");
+    }
+
+    #[test]
+    fn manual_choice_cancels_auto_away() {
+        let mut a = AutoAway::new(UiStatus::Online);
+        a.idle();
+        a.set_manual(UiStatus::Busy);
+        assert!(!a.is_auto());
+        assert_eq!(a.effective(), UiStatus::Busy);
+        // Activity afterwards must not override the manual choice.
+        assert!(!a.resume());
+        assert_eq!(a.effective(), UiStatus::Busy);
+        // Choosing Online while auto-away returns to plain Online.
+        let mut b = AutoAway::new(UiStatus::Online);
+        b.idle();
+        b.set_manual(UiStatus::Online);
+        assert_eq!(b.effective(), UiStatus::Online);
+        assert!(!b.is_auto());
     }
 }

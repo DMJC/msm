@@ -20,7 +20,7 @@
 - [x] Group rooms/invites: list, create, invite, accept/decline, leave, room windows (verified vs Synapse + GUI)
 - [ ] Membership management beyond invite/leave (kick/ban, room settings)
 - [x] Own status + tray + presence publishing (verified vs Synapse and on Wayland/MATE panel)
-- [ ] Automatic Away timer
+- [x] Automatic Away timer (Wayland ext-idle-notify; verified on real Wayfire session)
 - [ ] Contact presence display verified with two users sharing a room
 - [ ] Friend requests
 - [ ] E2EE + verification
