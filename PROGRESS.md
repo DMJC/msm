@@ -165,7 +165,7 @@ UI is still a placeholder window.
   - Declining a request from someone who is only a contact because of the request drops the contact; an existing customised contact is kept.
   - Verified: 4 manager unit tests + parse test, integration test (request, accept, remove across two real accounts; no room/invite created), GUI (bob's request showed in the section, Accept turned it into 👥 and bob received the accept).
   - Limits: to-device messages reach only the recipient's devices that exist at send time (a device added later doesn't see an old request; "Resend friend request" covers it); the sender's side cannot tell a request was never delivered (no read ack).
-- Tests: 62 unit + 3 bin + 16 integration pass; clippy/fmt clean.
+- Tests: 59 unit + 3 bin + 16 integration pass; clippy/fmt clean.
 
 ## Known problems / not verified
 - Verification needs both sides to already know each other's keys (e.g. a shared room) and the peer to have accepted the DM. The green ✔ states are not GUI-verified.
