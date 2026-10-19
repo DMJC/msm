@@ -690,3 +690,89 @@ async fn edits_and_reactions_between_two_users() {
     let rs = conv.reactions_for(&id);
     assert_eq!(rs[0].senders, ["@alice:localhost"]);
 }
+
+#[tokio::test]
+async fn attachments_round_trip_encrypted() {
+    use msm::matrix::media;
+    use msm::matrix::messages::AttachmentKind;
+    let Some(hs) = homeserver() else { return };
+    let alice = login_as(&hs, "alice", "att-alice").await;
+    let bob = login_as(&hs, "bob", "att-bob").await;
+    let room = rooms::create_group(
+        &alice,
+        &format!("Files {}", std::process::id()),
+        &["@bob:localhost".into()],
+    )
+    .await
+    .unwrap();
+    for _ in 0..10 {
+        sync_a_bit(&bob).await;
+        if !bob.invited_rooms().is_empty() {
+            break;
+        }
+    }
+    for r in bob.invited_rooms() {
+        r.join().await.unwrap();
+    }
+    sync_a_bit(&bob).await;
+    sync_a_bit(&alice).await;
+    assert!(room.encryption_state().is_encrypted());
+
+    // A binary file with a hostile-looking name on disk is sent under a safe name.
+    let dir = tmp("attach");
+    std::fs::create_dir_all(&dir).unwrap();
+    let payload: Vec<u8> = (0..70_000u32).map(|i| (i % 251) as u8).collect();
+    let path = dir.join("data.bin");
+    std::fs::write(&path, &payload).unwrap();
+    let png = dir.join("pixel.png");
+    // 1x1 PNG
+    let png_bytes: Vec<u8> = vec![
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52, 0,
+        0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 0x1f, 0x15, 0xc4, 0x89, 0, 0, 0, 0x0d, 0x49, 0x44,
+        0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xf0, 0x1f, 0, 5, 0, 1, 0xff, 0x89, 0x99,
+        0x3d, 0x1d, 0, 0, 0, 0, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+    std::fs::write(&png, &png_bytes).unwrap();
+
+    let id_file = media::send_file(&room, &path).await.unwrap();
+    let id_png = media::send_file(&room, &png).await.unwrap();
+    assert!(
+        media::send_file(&room, &dir.join("missing.bin"))
+            .await
+            .is_err()
+    );
+
+    sync_a_bit(&bob).await;
+    let broom = bob.get_room(room.room_id()).unwrap();
+    let conv = history_of(&broom).await;
+    let get = |id: &str| {
+        conv.messages()
+            .iter()
+            .find(|m| m.id == id)
+            .cloned()
+            .expect("message")
+    };
+
+    let mf = get(&id_file);
+    let att = mf.attachment.clone().expect("file attachment");
+    assert_eq!(att.kind, AttachmentKind::File);
+    assert_eq!(att.filename, "data.bin");
+    assert_eq!(att.size, Some(payload.len() as u64));
+    let bytes = media::download(&bob, &att.source, att.size).await.unwrap();
+    assert_eq!(bytes, payload, "decrypted download must match the upload");
+
+    let mp = get(&id_png);
+    let att = mp.attachment.clone().expect("image attachment");
+    assert_eq!(att.kind, AttachmentKind::Image);
+    assert_eq!(
+        media::download(&bob, &att.source, att.size).await.unwrap(),
+        png_bytes
+    );
+
+    // Oversized declared downloads are refused before any request.
+    assert!(
+        media::download(&bob, &att.source, Some(media::MAX_DOWNLOAD_BYTES + 1))
+            .await
+            .is_err()
+    );
+}

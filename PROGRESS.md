@@ -105,18 +105,29 @@ UI is still a placeholder window.
     Delete -> "message deleted". Integration test `edits_and_reactions_between_two_users` (foreign edit accepted by server but ignored; reactions add/remove) passes.
 - Tests: 46 unit + 11 integration pass; clippy/fmt clean.
 
+## Session 9
+- Phase 9: file / image attachments.
+  - `matrix::media`: `send_file` (size limit 50 MB, declares size + kind, MIME guessed, encrypted automatically in encrypted rooms),
+    `download` (SDK decrypts; declared-size cap 100 MB), `sanitize_filename` (hostile names: `../..`, backslashes, control chars, dotfiles, length), `human_size`.
+  - `matrix::messages`: `Attachment` (kind, filename, size, mime, source) parsed from m.file / m.image / m.audio / m.video.
+  - UI: 📎 button (file chooser), attachment rows with size, Save... (file chooser, sanitised default name) and Open (downloads into
+    `<data dir>/opened/<message>/<sanitised name>` and launches the default app), inline decrypted image previews (<= 8 MB, scaled, cached),
+    list scrolls to the end after layout.
+  - Verified: integration test (encrypted room, 70 KB binary + PNG round trip byte-for-byte, oversize refused) and the GUI (nested X server): preview rendered,
+    file sent from the app, Save wrote a byte-identical copy, everything reloaded after restart.
+- Tests: 51 unit + 12 integration pass; clippy/fmt clean.
+
 ## Known problems / not verified
-- Reactions/edits/emoji verified against Synapse and this client only (no Element). Edits of messages are text-only (no formatting/mentions).
-- No interactive device verification (SAS) yet; no per-message encryption indicators.
-- Not implemented: media/file attachments, avatars, in-conversation search, replies, friend requests, kick/ban and room settings,
-  recovery reset/disable.
-- The three-account GUI acceptance scenario (independent nicknames in a group) has not been run end to end.
-- "Load older messages" can show when nothing older exists.
-- Hide-to-tray via a real window-close click and the installed .desktop taskbar icon are unverified on the user's panel.
-- Idle detection needs a Wayland compositor with ext-idle-notify-v1. Contact cache assumes a single account.
+- Image previews decode untrusted data with gdk-pixbuf (size-limited, failures ignored); "Open" hands files to the default application, as other clients do.
+- No upload progress / cancel, no drag-and-drop or paste-image, no thumbnails sent with images, no audio/video playback (they appear as files).
+- Attachments verified against Synapse and this client only (no Element).
+- No interactive device verification (SAS), no per-message encryption indicators, no avatars, search or replies yet.
+- Not implemented: friend requests, kick/ban and room settings, recovery reset/disable.
+- The three-account GUI acceptance scenario has not been run end to end; hide-to-tray via a real close click and the installed .desktop icon are unverified on the user's panel.
+- "Load older messages" can show when nothing older exists. Contact cache assumes a single account.
 
 ## Exact next task
-1. File/image attachments (upload via SDK media API, show filename/size, download/open; image thumbnails) and avatars (own avatar editing, contacts, caching).
+1. Avatars: own avatar upload/edit in settings, contact and room avatars in the lists (cached, scaled), shown in conversation headers.
 2. In-conversation search and replies.
 3. Interactive verification (SAS emoji) + per-message encryption indicators.
 4. Friend requests; third-party interop test (Element Web vs local Synapse); three-account acceptance scenario.

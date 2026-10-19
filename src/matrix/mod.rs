@@ -1,6 +1,7 @@
 pub mod authentication;
 pub mod contacts_sync;
 pub mod encryption;
+pub mod media;
 pub mod messages;
 pub mod presence;
 pub mod rooms;

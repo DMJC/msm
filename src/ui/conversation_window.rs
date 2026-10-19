@@ -2,6 +2,7 @@
 //! display goes through the app-wide `NameResolver`.
 
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use gtk::gdk;
@@ -9,7 +10,10 @@ use gtk::glib;
 use gtk::prelude::*;
 use matrix_sdk::Room;
 use matrix_sdk::ruma::OwnedTransactionId;
-use msm::matrix::messages::{ChatMessage, Conversation, Delivery, Parsed, Reaction};
+use msm::matrix::media;
+use msm::matrix::messages::{
+    Attachment, AttachmentKind, ChatMessage, Conversation, Delivery, Parsed, Reaction,
+};
 use msm::matrix::rooms;
 
 use crate::app::{App, now_ms, spawn_async};
@@ -36,6 +40,9 @@ pub struct ConversationWindow {
     buffer: gtk::TextBuffer,
     /// Joined member count once the member list has been loaded.
     member_count: RefCell<Option<usize>>,
+    /// Decoded image previews by event ID, and which ones were already requested.
+    thumbs: RefCell<HashMap<String, gtk::gdk_pixbuf::Pixbuf>>,
+    thumb_requested: RefCell<HashSet<String>>,
     older: RefCell<Option<String>>,
     older_button: gtk::Button,
     i_am_typing: RefCell<bool>,
@@ -105,6 +112,8 @@ impl ConversationWindow {
         in_scroll.set_shadow_type(gtk::ShadowType::In);
         in_scroll.add(&input);
         let send = gtk::Button::with_label("Send");
+        let attach_btn = gtk::Button::with_label("📎");
+        attach_btn.set_tooltip_text(Some("Send a file"));
         let emoji_btn = gtk::MenuButton::new();
         emoji_btn.set_label("😀");
         emoji_btn.set_tooltip_text(Some("Insert emoji"));
@@ -112,6 +121,7 @@ impl ConversationWindow {
         row.pack_start(&in_scroll, true, true, 0);
         let side = gtk::Box::new(gtk::Orientation::Vertical, 4);
         side.pack_start(&emoji_btn, false, false, 0);
+        side.pack_start(&attach_btn, false, false, 0);
         side.pack_start(&send, false, false, 0);
         row.pack_start(&side, false, false, 0);
         root.pack_start(&row, false, false, 0);
@@ -137,6 +147,8 @@ impl ConversationWindow {
             input,
             buffer,
             member_count: RefCell::new(None),
+            thumbs: RefCell::new(HashMap::new()),
+            thumb_requested: RefCell::new(HashSet::new()),
             older: RefCell::new(None),
             older_button,
             i_am_typing: RefCell::new(false),
@@ -196,6 +208,8 @@ impl ConversationWindow {
         });
         let c = cw.clone();
         cw.older_button.connect_clicked(move |_| c.load_older());
+        let c = cw.clone();
+        attach_btn.connect_clicked(move |_| c.choose_and_send_file());
         let pop = gtk::Popover::new(Some(&emoji_btn));
         let grid = gtk::Grid::new();
         grid.set_margin(6);
@@ -498,7 +512,10 @@ impl ConversationWindow {
         self.list.show_all();
         if scroll_to_end {
             let adj = self.scroll.vadjustment();
-            glib::idle_add_local_once(move || adj.set_value(adj.upper() - adj.page_size()));
+            // Wait for the new rows (images, buttons) to be allocated before measuring the end.
+            let scroll = move || adj.set_value(adj.upper() - adj.page_size());
+            glib::idle_add_local_once(scroll.clone());
+            glib::timeout_add_local_once(std::time::Duration::from_millis(120), scroll);
         }
     }
 
@@ -509,7 +526,26 @@ impl ConversationWindow {
             .and_then(|d| d.format("%H:%M").ok())
             .map(|s| s.to_string())
             .unwrap_or_default();
-        let text = if m.redacted {
+        let text = if let (Some(a), false) = (&m.attachment, m.redacted) {
+            let icon = match a.kind {
+                AttachmentKind::Image => "🖼",
+                AttachmentKind::Audio => "🎵",
+                AttachmentKind::Video => "🎬",
+                AttachmentKind::File => "📎",
+            };
+            let size = a
+                .size
+                .map(|s| format!(" ({})", media::human_size(s)))
+                .unwrap_or_default();
+            let name = glib::markup_escape_text(&media::sanitize_filename(&a.filename));
+            // A caption differs from the filename; show it too.
+            let caption = if !m.body.is_empty() && m.body != a.filename {
+                format!("\n{}", glib::markup_escape_text(&m.body))
+            } else {
+                String::new()
+            };
+            format!("{icon} {name}{size}{caption}")
+        } else if m.redacted {
             "<i>message deleted</i>".to_owned()
         } else if m.undecryptable {
             "<i>🔒 Unable to decrypt this message (keys not available yet)</i>".to_owned()
@@ -550,6 +586,17 @@ impl ConversationWindow {
             row.pack_start(&btn, false, false, 0);
         }
 
+        if let (Some(att), false) = (&m.attachment, m.redacted) {
+            let save = gtk::Button::with_label("Save…");
+            let open = gtk::Button::with_label("Open");
+            let (this, a, id) = (self.clone(), att.clone(), m.id.clone());
+            save.connect_clicked(move |_| this.save_attachment(&a));
+            let (this, a) = (self.clone(), att.clone());
+            open.connect_clicked(move |_| this.open_attachment(&id, &a));
+            row.pack_start(&save, false, false, 0);
+            row.pack_start(&open, false, false, 0);
+        }
+
         // A selectable label handles right-clicks itself, so extend its own menu.
         if m.delivery == Delivery::Sent && !m.redacted && m.id.starts_with('$') {
             let (this, msg, mine) = (self.clone(), m.clone(), m.sender == me);
@@ -560,6 +607,11 @@ impl ConversationWindow {
 
         let outer = gtk::Box::new(gtk::Orientation::Vertical, 2);
         outer.pack_start(&row, false, false, 0);
+        if let (Some(att), false) = (&m.attachment, m.redacted)
+            && att.kind == AttachmentKind::Image
+        {
+            self.image_preview(&outer, &m.id, att);
+        }
         let chips = self.reaction_chips(m, me);
         if let Some(chips) = chips {
             outer.pack_start(&chips, false, false, 0);
@@ -590,6 +642,150 @@ impl ConversationWindow {
             menu.append(&del);
         }
         menu.show_all();
+    }
+
+    fn client(&self) -> Option<matrix_sdk::Client> {
+        self.app.client.borrow().clone()
+    }
+
+    /// Show a cached preview, or fetch one (small images only) and redraw when it arrives.
+    fn image_preview(self: &Rc<Self>, outer: &gtk::Box, id: &str, att: &Attachment) {
+        const MAX_PREVIEW_BYTES: u64 = 8 * 1024 * 1024;
+        if let Some(pb) = self.thumbs.borrow().get(id) {
+            let img = gtk::Image::from_pixbuf(Some(pb));
+            img.set_halign(gtk::Align::Start);
+            img.set_margin_start(16);
+            outer.pack_start(&img, false, false, 0);
+            return;
+        }
+        if att.size.is_some_and(|s| s > MAX_PREVIEW_BYTES)
+            || !self.thumb_requested.borrow_mut().insert(id.to_owned())
+        {
+            return;
+        }
+        let Some(client) = self.client() else { return };
+        let (source, size, this, id) = (att.source.clone(), att.size, self.clone(), id.to_owned());
+        spawn_async(
+            async move { media::download(&client, &source, size).await.ok() },
+            move |bytes| {
+                let Some(bytes) = bytes else { return };
+                if let Some(pb) = decode_preview(&bytes) {
+                    this.thumbs.borrow_mut().insert(id, pb);
+                    this.redraw(false);
+                }
+            },
+        );
+    }
+
+    fn choose_and_send_file(self: &Rc<Self>) {
+        let d = gtk::FileChooserDialog::with_buttons(
+            Some("Send a file"),
+            Some(&self.window),
+            gtk::FileChooserAction::Open,
+            &[
+                ("Cancel", gtk::ResponseType::Cancel),
+                ("Send", gtk::ResponseType::Accept),
+            ],
+        );
+        let chosen = (d.run() == gtk::ResponseType::Accept)
+            .then(|| d.filename())
+            .flatten();
+        d.close();
+        let Some(path) = chosen else { return };
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.typing.set_text(&format!("Uploading {name}…"));
+        let (room, this) = (self.room.clone(), self.clone());
+        spawn_async(
+            async move {
+                media::send_file(&room, &path)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            move |res| match res {
+                // The message itself arrives through the live event feed.
+                Ok(_) => this.typing.set_text(""),
+                Err(e) => this.typing.set_text(&format!("Could not send file: {e}")),
+            },
+        );
+    }
+
+    fn save_attachment(self: &Rc<Self>, att: &Attachment) {
+        let d = gtk::FileChooserDialog::with_buttons(
+            Some("Save attachment"),
+            Some(&self.window),
+            gtk::FileChooserAction::Save,
+            &[
+                ("Cancel", gtk::ResponseType::Cancel),
+                ("Save", gtk::ResponseType::Accept),
+            ],
+        );
+        d.set_do_overwrite_confirmation(true);
+        d.set_current_name(&media::sanitize_filename(&att.filename));
+        let chosen = (d.run() == gtk::ResponseType::Accept)
+            .then(|| d.filename())
+            .flatten();
+        d.close();
+        let (Some(path), Some(client)) = (chosen, self.client()) else {
+            return;
+        };
+        let (source, size, this) = (att.source.clone(), att.size, self.clone());
+        self.typing.set_text("Downloading…");
+        spawn_async(
+            async move {
+                let bytes = media::download(&client, &source, size)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+                Ok::<_, String>(path)
+            },
+            move |res| match res {
+                Ok(p) => this.typing.set_text(&format!("Saved to {}", p.display())),
+                Err(e) => this.typing.set_text(&format!("Could not save: {e}")),
+            },
+        );
+    }
+
+    /// Download to a private cache folder (one subfolder per message) and open with the default app.
+    fn open_attachment(self: &Rc<Self>, event_id: &str, att: &Attachment) {
+        let Some(client) = self.client() else { return };
+        let folder: String = event_id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .take(24)
+            .collect();
+        let dir = msm::matrix::authentication::data_dir()
+            .join("opened")
+            .join(folder);
+        let path = dir.join(media::sanitize_filename(&att.filename));
+        let (source, size, this) = (att.source.clone(), att.size, self.clone());
+        self.typing.set_text("Downloading…");
+        spawn_async(
+            async move {
+                let bytes = media::download(&client, &source, size)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+                Ok::<_, String>(path)
+            },
+            move |res| match res {
+                Ok(p) => {
+                    this.typing.set_text("");
+                    let uri = gtk::gio::File::for_path(&p).uri();
+                    if let Err(e) = gtk::gio::AppInfo::launch_default_for_uri(
+                        &uri,
+                        None::<&gtk::gio::AppLaunchContext>,
+                    ) {
+                        this.typing
+                            .set_text(&format!("No application could open it: {e}"));
+                    }
+                }
+                Err(e) => this.typing.set_text(&format!("Could not open: {e}")),
+            },
+        );
     }
 
     /// Clickable reaction summary under a message; clicking toggles our own reaction.
@@ -690,4 +886,26 @@ impl ConversationWindow {
             },
         );
     }
+}
+
+/// Decode an image and scale it down for inline display (untrusted data: failures are ignored).
+fn decode_preview(bytes: &[u8]) -> Option<gtk::gdk_pixbuf::Pixbuf> {
+    const MAX_W: i32 = 260;
+    const MAX_H: i32 = 200;
+    let loader = gtk::gdk_pixbuf::PixbufLoader::new();
+    loader.write(bytes).ok()?;
+    loader.close().ok()?;
+    let pb = loader.pixbuf()?;
+    let (w, h) = (pb.width(), pb.height());
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    let scale = (f64::from(MAX_W) / f64::from(w))
+        .min(f64::from(MAX_H) / f64::from(h))
+        .min(1.0);
+    let (nw, nh) = (
+        ((f64::from(w) * scale) as i32).max(1),
+        ((f64::from(h) * scale) as i32).max(1),
+    );
+    pb.scale_simple(nw, nh, gtk::gdk_pixbuf::InterpType::Bilinear)
 }

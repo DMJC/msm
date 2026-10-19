@@ -4,7 +4,8 @@
 
 use std::collections::HashMap;
 
-use matrix_sdk::ruma::events::room::message::Relation;
+use matrix_sdk::ruma::events::room::MediaSource;
+use matrix_sdk::ruma::events::room::message::{MessageType, Relation};
 use matrix_sdk::ruma::events::room::redaction::SyncRoomRedactionEvent;
 use matrix_sdk::ruma::events::{
     AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent,
@@ -16,6 +17,85 @@ pub enum Delivery {
     Pending,
     Sent,
     Failed(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachmentKind {
+    File,
+    Image,
+    Audio,
+    Video,
+}
+
+/// Media attached to a message. `filename` is untrusted: sanitise before using as a path.
+#[derive(Debug, Clone)]
+pub struct Attachment {
+    pub kind: AttachmentKind,
+    pub filename: String,
+    pub size: Option<u64>,
+    pub mime: Option<String>,
+    pub source: MediaSource,
+}
+
+impl Attachment {
+    /// The media URL (`mxc://...`), which identifies the content.
+    pub fn url(&self) -> String {
+        match &self.source {
+            MediaSource::Plain(u) => u.to_string(),
+            MediaSource::Encrypted(f) => f.url.to_string(),
+        }
+    }
+}
+
+// `MediaSource` has no equality of its own; the URL identifies the content.
+impl PartialEq for Attachment {
+    fn eq(&self, o: &Self) -> bool {
+        (self.kind, &self.filename, self.size, &self.mime, self.url())
+            == (o.kind, &o.filename, o.size, &o.mime, o.url())
+    }
+}
+impl Eq for Attachment {}
+
+/// Describe the media in a message, if it has any.
+pub fn attachment_of(t: &MessageType) -> Option<Attachment> {
+    let (kind, filename, source, size, mime) = match t {
+        MessageType::File(c) => (
+            AttachmentKind::File,
+            c.filename().to_owned(),
+            c.source.clone(),
+            c.info.as_ref().and_then(|i| i.size),
+            c.info.as_ref().and_then(|i| i.mimetype.clone()),
+        ),
+        MessageType::Image(c) => (
+            AttachmentKind::Image,
+            c.filename().to_owned(),
+            c.source.clone(),
+            c.info.as_ref().and_then(|i| i.size),
+            c.info.as_ref().and_then(|i| i.mimetype.clone()),
+        ),
+        MessageType::Audio(c) => (
+            AttachmentKind::Audio,
+            c.filename().to_owned(),
+            c.source.clone(),
+            c.info.as_ref().and_then(|i| i.size),
+            c.info.as_ref().and_then(|i| i.mimetype.clone()),
+        ),
+        MessageType::Video(c) => (
+            AttachmentKind::Video,
+            c.filename().to_owned(),
+            c.source.clone(),
+            c.info.as_ref().and_then(|i| i.size),
+            c.info.as_ref().and_then(|i| i.mimetype.clone()),
+        ),
+        _ => return None,
+    };
+    Some(Attachment {
+        kind,
+        filename,
+        size: size.map(u64::from),
+        mime,
+        source,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +111,7 @@ pub struct ChatMessage {
     pub redacted: bool,
     pub undecryptable: bool,
     pub delivery: Delivery,
+    pub attachment: Option<Attachment>,
 }
 
 /// A decoded timeline event relevant to the conversation view.
@@ -146,6 +227,7 @@ impl Conversation {
             redacted: false,
             undecryptable: false,
             delivery: Delivery::Pending,
+            attachment: None,
         });
     }
 
@@ -312,6 +394,7 @@ pub fn parse_event(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
                 redacted: false,
                 undecryptable: false,
                 delivery: Delivery::Sent,
+                attachment: attachment_of(&e.content.msgtype),
             }))
         }
         AnySyncMessageLikeEvent::RoomEncrypted(SyncMessageLikeEvent::Redacted(e)) => {
@@ -325,6 +408,7 @@ pub fn parse_event(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
                 redacted: true,
                 undecryptable: false,
                 delivery: Delivery::Sent,
+                attachment: None,
             }))
         }
         AnySyncMessageLikeEvent::RoomMessage(SyncMessageLikeEvent::Redacted(e)) => {
@@ -338,6 +422,7 @@ pub fn parse_event(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
                 redacted: true,
                 undecryptable: false,
                 delivery: Delivery::Sent,
+                attachment: None,
             }))
         }
         AnySyncMessageLikeEvent::RoomEncrypted(SyncMessageLikeEvent::Original(e)) => {
@@ -351,6 +436,7 @@ pub fn parse_event(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
                 redacted: false,
                 undecryptable: true,
                 delivery: Delivery::Sent,
+                attachment: None,
             }))
         }
         AnySyncMessageLikeEvent::Reaction(SyncMessageLikeEvent::Original(e)) => {
@@ -396,6 +482,7 @@ fn parse_redacted_fallback(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
         redacted: true,
         undecryptable: false,
         delivery: Delivery::Sent,
+        attachment: None,
     }))
 }
 
@@ -419,6 +506,7 @@ mod tests {
             redacted: false,
             undecryptable: false,
             delivery: Delivery::Sent,
+            attachment: None,
         }
     }
 
@@ -634,5 +722,46 @@ mod tests {
             r,
             Some(Parsed::Reaction(reaction("$r", "$1", "🎉", "@b:x")))
         );
+    }
+
+    #[test]
+    fn parses_attachments() {
+        let f = parse_event(&raw(json!({
+            "type":"m.room.message","event_id":"$f","sender":"@a:x","origin_server_ts":1,
+            "content":{"msgtype":"m.file","body":"report.pdf","filename":"report.pdf",
+                       "url":"mxc://example.org/abc","info":{"size":2048,"mimetype":"application/pdf"}}
+        })));
+        match f {
+            Some(Parsed::Message(m)) => {
+                let a = m.attachment.expect("file attachment");
+                assert_eq!(a.kind, AttachmentKind::File);
+                assert_eq!(a.filename, "report.pdf");
+                assert_eq!(a.size, Some(2048));
+                assert_eq!(a.mime.as_deref(), Some("application/pdf"));
+                assert_eq!(a.url(), "mxc://example.org/abc");
+            }
+            other => panic!("{other:?}"),
+        }
+        let i = parse_event(&raw(json!({
+            "type":"m.room.message","event_id":"$i","sender":"@a:x","origin_server_ts":2,
+            "content":{"msgtype":"m.image","body":"cat.png","url":"mxc://example.org/img"}
+        })));
+        match i {
+            Some(Parsed::Message(m)) => {
+                let a = m.attachment.expect("image attachment");
+                assert_eq!(a.kind, AttachmentKind::Image);
+                assert_eq!(a.filename, "cat.png");
+                assert_eq!(a.size, None);
+            }
+            other => panic!("{other:?}"),
+        }
+        // Plain text has none.
+        match parse_event(&raw(json!({
+            "type":"m.room.message","event_id":"$t","sender":"@a:x","origin_server_ts":3,
+            "content":{"msgtype":"m.text","body":"hello"}
+        }))) {
+            Some(Parsed::Message(m)) => assert!(m.attachment.is_none()),
+            other => panic!("{other:?}"),
+        }
     }
 }

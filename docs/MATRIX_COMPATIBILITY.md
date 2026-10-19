@@ -50,6 +50,11 @@ Reactions are standard `m.reaction` annotations (removing one redacts the reacti
 Per spec an edit is honoured only if it comes from the original message's sender; the newest edit wins regardless of arrival order.
 Verified between two accounts on Synapse, including that another user's "edit" is ignored.
 
+## Attachments
+Files and images are sent as `m.file` / `m.image` (also received: audio, video as files) with size and MIME type declared. In encrypted rooms the SDK
+encrypts the upload and decrypts downloads. Filenames from other users are untrusted and sanitised before being used as paths.
+Limits: 50 MB upload, 100 MB declared download, 8 MB for inline previews.
+
 ## Group rooms and invitations
 Group rooms are joined rooms with no `m.direct` targets that are not spaces. New rooms are created private (`private_chat` preset)
 and encrypted. Invitations show the inviter and room name; declining uses a normal leave. Room-specific display names come

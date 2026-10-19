@@ -11,6 +11,7 @@ gtk = "0.19"
 ksni = "0.3.6"
 libc = "0.2.191"
 matrix-sdk = "0.19"
+mime_guess = "2.0.5"
 oo7 = { version = "0.6.0", default-features = false, features = ["tokio", "native_crypto"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
