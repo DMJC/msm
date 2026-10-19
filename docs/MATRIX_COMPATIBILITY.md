@@ -72,7 +72,7 @@ from member state events and rank below local nicknames and above global profile
 Verified on Synapse: create/invite/accept/decline/leave, history, encrypted messages between members.
 
 ## Interoperability check with Element Web
-Tested with Element Web 1.12.32 against a local Synapse: DM creation/invite, encrypted text, replies, edits, reactions and redactions interoperate in both directions. Attachments, avatars, verification and presence have not been checked against Element.
+Tested with Element Web 1.12.32 against a local Synapse: DM creation/invite, encrypted text, replies, edits, reactions and redactions interoperate in both directions. Encrypted attachments (images and files, both directions) and our profile picture also interoperate. Verification and presence have not been checked against Element.
 
 ## Friend requests
 - Carried as the custom to-device event type `com.matrixmessenger.friend.v1` with content `{"action": "request" | "accept" | "reject" | "remove"}`. It is not a room invitation or message, so no room appears for third-party users; clients that don't know the type ignore it.

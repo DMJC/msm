@@ -169,7 +169,8 @@ UI is still a placeholder window.
 - Third-party interop (Element Web 1.12.32 in headless Chrome, driven with puppeteer, against local Synapse; msm library as the other side, since the GTK window can't share the headless run):
   - Verified both ways in an encrypted DM: msm-created DM is shown by Element as a direct chat invitation ("wants to chat"), Element decrypts msm's message; msm decrypts Element's messages; Element reply (`m.in_reply_to`) parsed with correct target; Element edit applied (`edited=true`, new text); Element reaction read; msm reply renders with quote in Element, msm reaction shows as a ❤️ pill, msm edit shows "(edited)", msm redaction shows "Message deleted".
   - Observed: every fresh login is a new device and cannot read earlier encrypted history (expected). Element flags msm's messages with a red shield (msm device not cross-signed).
-  - Not covered: attachments, avatars, SAS verification and presence against Element; the GTK window itself was not used in this run.
+  - Second Element run (encrypted DM): msm's image and text file render in Element with correct names/sizes/preview; msm's profile picture shows in Element (room list, header, timeline); Element's image and file are downloaded and decrypted by msm with matching mime types and byte sizes.
+  - Not covered: SAS verification and presence against Element; Element's profile picture shown in msm; the GTK window itself was not used in these runs.
 - Tests: 59 unit + 3 bin + 18 integration pass; clippy/fmt clean.
 
 ## Session 15
@@ -193,4 +194,4 @@ UI is still a placeholder window.
 - "Load older messages" can show when nothing older exists. Contact cache assumes a single account.
 
 ## Exact next task
-1. Remaining interop checks vs Element (attachments, avatars, SAS verification, presence); optional three-account GUI run.
+1. Remaining interop checks vs Element (SAS verification, presence); optional three-account GUI run.

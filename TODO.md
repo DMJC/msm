@@ -32,7 +32,7 @@
 - [x] File/image attachments (encrypted round trip verified; GUI verified)
 - [x] Avatars (own set/remove, contacts, rooms, headers; verified vs Synapse + GUI)
 - [x] In-conversation search (loaded messages), replies (verified vs Synapse + GUI)
-- [x] Integration tests vs local Synapse (17 tests) and an Element Web interop run (text, replies, edits, reactions, redactions); [ ] Element checks for attachments, avatars, verification, presence
+- [x] Integration tests vs local Synapse (17 tests) and an Element Web interop run (text, replies, edits, reactions, redactions, attachments, avatar); [ ] Element checks for verification, presence
 - [ ] Packaging, user docs
 
 ## Platform
