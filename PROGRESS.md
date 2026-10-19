@@ -187,6 +187,7 @@ UI is still a placeholder window.
 - Other users' avatar changes show up live: `avatars::watch_changes` reports a member event whose avatar differs from `prev_content`; the app drops the cached `u:<mxid>` avatar and refreshes. Integration test `avatar_change_in_a_shared_room_is_reported` passes (2 avatar tests, clippy clean); full suite and the GUI not re-run.
 - Placeholder avatars show the contact's initial (cairo text on the flat colour; unit test for initials, rendering checked by dumping a PNG; not looked at in the running GUI).
 - Reply quotes are clickable and scroll to the original (clearing a search that hides it; a hint if it is older than what is loaded). Verified in the GUI with the original scrolled out of view. Placeholder initials only for people, not rooms (checked live: room tiles were all "R" before).
+- Drag-and-drop: dropping local files on a conversation window sends them (`send_file`, shared with the 📎 button). Verified in the GUI with a GTK drag source in Xephyr: the file was uploaded and shown as an attachment. Dropping onto the text input is handled by the text view itself and does not send.
 - Verification-request unread count: investigated, it is SDK/server behaviour, left as a known problem.
 
 ## Known problems / not verified
@@ -196,7 +197,7 @@ UI is still a placeholder window.
 - Search covers only messages already loaded (no server-side search); replies to unloaded messages show "an earlier message"; jump-to-original works only for loaded messages.
 - Other users' avatar changes are now noticed live (Session 17: member-event watcher drops the cached avatar; integration test only, not seen in the GUI);  no avatar zoom/preview.
 - Image previews decode untrusted data with gdk-pixbuf (size-limited, failures ignored); "Open" hands files to the default application, as other clients do.
-- No upload progress / cancel, no drag-and-drop or paste-image, no thumbnails sent with images, no audio/video playback (they appear as files).
+- No upload progress / cancel, no paste-image, no thumbnails sent with images, no audio/video playback (they appear as files).
 - Attachments verified against Synapse and this client only (no Element).
 - No interactive device verification (SAS), green ✔ states unverified in GUI.
 - Not implemented: power-level editing, room avatar/join rules, recovery reset/disable.

@@ -279,6 +279,25 @@ impl ConversationWindow {
         cw.older_button.connect_clicked(move |_| c.load_older());
         let c = cw.clone();
         attach_btn.connect_clicked(move |_| c.choose_and_send_file());
+        // Dropping files from a file manager sends them (local files only).
+        let c = cw.clone();
+        cw.window.drag_dest_set(
+            gtk::DestDefaults::ALL,
+            &[gtk::TargetEntry::new(
+                "text/uri-list",
+                gtk::TargetFlags::OTHER_APP,
+                0,
+            )],
+            gtk::gdk::DragAction::COPY,
+        );
+        cw.window
+            .connect_drag_data_received(move |_, _, _, _, data, _, _| {
+                for uri in data.uris() {
+                    if let Some(path) = gtk::gio::File::for_uri(&uri).path() {
+                        c.send_file(path);
+                    }
+                }
+            });
         let pop = gtk::Popover::new(Some(&emoji_btn));
         let grid = gtk::Grid::new();
         grid.set_margin(6);
@@ -892,7 +911,12 @@ impl ConversationWindow {
             .then(|| d.filename())
             .flatten();
         d.close();
-        let Some(path) = chosen else { return };
+        if let Some(path) = chosen {
+            self.send_file(path);
+        }
+    }
+
+    fn send_file(self: &Rc<Self>, path: std::path::PathBuf) {
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
