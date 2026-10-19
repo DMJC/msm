@@ -1256,3 +1256,42 @@ async fn kick_ban_unban_and_room_settings_respect_power_levels() {
     assert!(row(&s, &b).is_none());
     rooms::invite_user(&room, &b).await.unwrap();
 }
+
+#[tokio::test]
+async fn history_pagination_ends_at_the_start_of_the_room() {
+    let Some(hs) = homeserver() else { return };
+    let (alice, _, _) = register_fresh(&hs).await;
+    let room = rooms::create_group(&alice, "Paging", &[]).await.unwrap();
+    for i in 0..12 {
+        rooms::send_text(
+            &room,
+            &format!("msg {i}"),
+            matrix_sdk::ruma::TransactionId::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    sync_a_bit(&alice).await;
+    let mut seen = std::collections::HashSet::new();
+    let (mut token, mut pages) = (None::<String>, 0);
+    loop {
+        let h = rooms::load_history(&room, token.as_deref(), 5)
+            .await
+            .unwrap();
+        pages += 1;
+        seen.extend(h.events.iter().map(|e| format!("{e:?}")));
+        token = h.older_token;
+        if token.is_none() {
+            break;
+        }
+        assert!(pages < 20, "pagination must terminate");
+    }
+    assert!(pages >= 3, "12 messages need several pages of 5");
+    let all = rooms::load_history(&room, None, 500).await.unwrap();
+    assert!(
+        all.older_token.is_none(),
+        "no 'load older' when the whole room fits in one page"
+    );
+    assert!(seen.len() >= 12);
+}

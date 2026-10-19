@@ -179,6 +179,10 @@ UI is still a placeholder window.
   - Verified: integration test (creator vs ordinary member permissions, rename/topic reach others, kick, ban, banned can't be re-invited, unban) and GUI (non-admin sees disabled fields and no buttons; admin saved a topic, kicked, banned and unbanned with the list refreshing).
   - Not done: changing power levels, room avatar, room join rules/visibility, reporting.
 
+## Session 16
+- "Load older messages" no longer shows when the first page already reached the start of the room (`load_history` drops the continuation token for a short page). Integration test `history_pagination_ends_at_the_start_of_the_room` (paging terminates, nothing older for a short room). Not re-checked in the GUI.
+- Tests: 59 unit + 3 bin + 19 integration (the new one takes about a minute because of Synapse's send rate limit).
+
 ## Known problems / not verified
 - Verification needs both sides to already know each other's keys (e.g. a shared room) and the peer to have accepted the DM. The green ✔ states are not GUI-verified.
 - The verification-request message in the DM counts as an unread message.
@@ -191,7 +195,7 @@ UI is still a placeholder window.
 - No interactive device verification (SAS), green ✔ states unverified in GUI.
 - Not implemented: power-level editing, room avatar/join rules, recovery reset/disable.
 - The three-account GUI acceptance scenario has not been run end to end; hide-to-tray via a real close click and the installed .desktop icon are unverified on the user's panel.
-- "Load older messages" can show when nothing older exists. Contact cache assumes a single account.
+- Contact cache assumes a single account.
 
 ## Exact next task
 1. Remaining interop checks vs Element (SAS verification, presence); optional three-account GUI run.

@@ -328,11 +328,14 @@ pub async fn load_history(
     let mut opts = MessagesOptions::backward().from(from);
     opts.limit = limit.into();
     let msgs = room.messages(opts).await.map_err(mx)?;
+    // A short page means we reached the start of the room, even though servers
+    // often still hand back a continuation token.
+    let reached_start = msgs.chunk.len() < usize::from(limit);
     let mut events: Vec<Parsed> = msgs.chunk.iter().filter_map(parse_timeline_event).collect();
     events.reverse();
     Ok(History {
         events,
-        older_token: msgs.end,
+        older_token: msgs.end.filter(|_| !reached_start),
     })
 }
 
