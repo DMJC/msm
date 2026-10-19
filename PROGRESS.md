@@ -117,17 +117,28 @@ UI is still a placeholder window.
     file sent from the app, Save wrote a byte-identical copy, everything reloaded after restart.
 - Tests: 51 unit + 12 integration pass; clippy/fmt clean.
 
+## Session 10
+- Phase 9: avatars.
+  - `matrix::avatars`: `user_avatar` (profile lookup + 64px thumbnail), `room_avatar`, `set_own_avatar` (5 MB cap), `remove_own_avatar`; fetched bytes capped at 2 MB.
+  - `ui::avatar`: defensive decode (dimension limit, centre-crop square, 40px) and stable colour placeholders; unit-tested.
+  - App-level cache (`App::avatar`, keys `u:<mxid>` / `r:<room>#<avatar url>` so a room avatar change refetches); rows redraw when an avatar arrives.
+  - UI: own picture button in the main window (Change picture... / Remove picture), avatars on contact and room rows and in conversation headers.
+  - Avatars are Matrix profile/room state and are separate from local nicknames, which still never touch Matrix.
+  - Verified: integration test `avatar_set_fetch_and_remove` (set, other user fetches, oversize refused, remove) and the GUI (nested X server): contact + room avatars,
+    own picture chosen via the file dialog and confirmed on the server profile, header avatar.
+- Tests: 52 unit + 3 bin + 13 integration pass; clippy/fmt clean.
+
 ## Known problems / not verified
+- Other users' avatar changes are only noticed after restart (user avatars are cached for the session); no initials on placeholders; no avatar zoom/preview.
 - Image previews decode untrusted data with gdk-pixbuf (size-limited, failures ignored); "Open" hands files to the default application, as other clients do.
 - No upload progress / cancel, no drag-and-drop or paste-image, no thumbnails sent with images, no audio/video playback (they appear as files).
 - Attachments verified against Synapse and this client only (no Element).
-- No interactive device verification (SAS), no per-message encryption indicators, no avatars, search or replies yet.
+- No interactive device verification (SAS), no per-message encryption indicators, no search or replies yet.
 - Not implemented: friend requests, kick/ban and room settings, recovery reset/disable.
 - The three-account GUI acceptance scenario has not been run end to end; hide-to-tray via a real close click and the installed .desktop icon are unverified on the user's panel.
 - "Load older messages" can show when nothing older exists. Contact cache assumes a single account.
 
 ## Exact next task
-1. Avatars: own avatar upload/edit in settings, contact and room avatars in the lists (cached, scaled), shown in conversation headers.
-2. In-conversation search and replies.
-3. Interactive verification (SAS emoji) + per-message encryption indicators.
-4. Friend requests; third-party interop test (Element Web vs local Synapse); three-account acceptance scenario.
+1. In-conversation search and replies.
+2. Interactive verification (SAS emoji) + per-message encryption indicators.
+3. Friend requests; third-party interop test (Element Web vs local Synapse); three-account acceptance scenario.

@@ -35,6 +35,7 @@ pub struct ConversationWindow {
     list: gtk::Box,
     scroll: gtk::ScrolledWindow,
     title: gtk::Label,
+    avatar: gtk::Image,
     typing: gtk::Label,
     input: gtk::TextView,
     buffer: gtk::TextBuffer,
@@ -75,7 +76,11 @@ impl ConversationWindow {
         let encrypted = gtk::Label::new(None);
         encrypted.set_xalign(0.0);
         encrypted.style_context().add_class("dim-label");
-        root.pack_start(&title, false, false, 0);
+        let avatar = gtk::Image::from_pixbuf(Some(&crate::ui::avatar::placeholder("")));
+        let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        head.pack_start(&avatar, false, false, 0);
+        head.pack_start(&title, true, true, 0);
+        root.pack_start(&head, false, false, 0);
         root.pack_start(&encrypted, false, false, 0);
         let is_room = peer.is_none();
         let (invite_btn, leave_btn) = (
@@ -143,6 +148,7 @@ impl ConversationWindow {
             list,
             scroll,
             title,
+            avatar,
             typing,
             input,
             buffer,
@@ -292,6 +298,11 @@ impl ConversationWindow {
                 ),
             ),
         };
+        let key = match &self.peer {
+            Some(p) => format!("u:{p}"),
+            None => App::room_avatar_key(&self.room),
+        };
+        self.avatar.set_from_pixbuf(Some(&self.app.avatar(&key)));
         self.window.set_title(&name);
         self.title.set_markup(&format!(
             "<b>{}</b>  <small>{}</small>",

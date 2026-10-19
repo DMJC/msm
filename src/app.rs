@@ -3,7 +3,7 @@
 //! results come back on the main thread.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
@@ -19,7 +19,7 @@ use msm::matrix::messages::Parsed;
 use msm::matrix::presence::{self, ContactPresence, UiStatus};
 use msm::matrix::rooms::{self, LiveEvent};
 use msm::matrix::synchronization::{self, SyncEvent};
-use msm::matrix::{authentication, contacts_sync};
+use msm::matrix::{authentication, avatars, contacts_sync, media};
 use msm::storage::database::Database;
 use tokio::task::JoinHandle;
 
@@ -86,6 +86,11 @@ pub struct App {
     pub invites: RefCell<Vec<rooms::Invite>>,
     /// Latest known presence of other users; absent means Unknown.
     pub contact_presence: RefCell<HashMap<String, (ContactPresence, Option<String>)>>,
+    /// Decoded avatars by key (`u:<mxid>` / `r:<room id>`); `None` = fetched, has none.
+    avatars: RefCell<HashMap<String, Option<gtk::gdk_pixbuf::Pixbuf>>>,
+    avatar_pending: RefCell<HashSet<String>>,
+    /// Bumped whenever an avatar arrives, so views know to redraw.
+    pub avatar_gen: Cell<u32>,
 }
 
 impl App {
@@ -134,6 +139,9 @@ impl App {
             tray: RefCell::new(None),
             invites: RefCell::new(Vec::new()),
             contact_presence: RefCell::new(HashMap::new()),
+            avatars: RefCell::new(HashMap::new()),
+            avatar_pending: RefCell::new(HashSet::new()),
+            avatar_gen: Cell::new(0),
         })
     }
 
@@ -488,6 +496,115 @@ impl App {
                 },
             );
         }
+    }
+
+    /// The avatar for `key` (`u:<mxid>` or `r:<room id>`), or a stable placeholder
+    /// while it loads or if there is none. Fetches at most once per key.
+    pub fn avatar(self: &Rc<Self>, key: &str) -> gtk::gdk_pixbuf::Pixbuf {
+        if let Some(Some(pb)) = self.avatars.borrow().get(key) {
+            return pb.clone();
+        }
+        // `r:<room>#` carries the room's current avatar URL; empty means none to fetch.
+        if key.starts_with("r:") && key.ends_with('#') {
+            return ui::avatar::placeholder(key);
+        }
+        let known = self.avatars.borrow().contains_key(key);
+        if !known && self.avatar_pending.borrow_mut().insert(key.to_owned()) {
+            self.fetch_avatar(key);
+        }
+        ui::avatar::placeholder(key)
+    }
+
+    fn fetch_avatar(self: &Rc<Self>, key: &str) {
+        let Some(client) = self.client.borrow().clone() else {
+            self.avatar_pending.borrow_mut().remove(key);
+            return;
+        };
+        let (app, k) = (self.clone(), key.to_owned());
+        let fetch_key = key.to_owned();
+        spawn_async(
+            async move {
+                match fetch_key.split_once(':') {
+                    Some(("u", mxid)) => avatars::user_avatar(&client, mxid).await,
+                    Some(("r", id)) => match <&matrix_sdk::ruma::RoomId>::try_from(
+                        id.split('#').next().unwrap_or(id),
+                    )
+                    .ok()
+                    .and_then(|rid| client.get_room(rid))
+                    {
+                        Some(room) => avatars::room_avatar(&room).await,
+                        None => None,
+                    },
+                    _ => None,
+                }
+            },
+            move |bytes| {
+                app.avatar_pending.borrow_mut().remove(&k);
+                // A session change mid-fetch must not poison the cache.
+                if app.client.borrow().is_none() {
+                    return;
+                }
+                let pb = bytes.and_then(|b| ui::avatar::decode(&b));
+                app.avatars.borrow_mut().insert(k, pb);
+                app.avatar_gen.set(app.avatar_gen.get() + 1);
+                app.refresh();
+            },
+        );
+    }
+
+    /// Cache key for a room's avatar; changes when the room's avatar does.
+    pub fn room_avatar_key(room: &matrix_sdk::Room) -> String {
+        format!(
+            "r:{}#{}",
+            room.room_id(),
+            room.avatar_url().map(|u| u.to_string()).unwrap_or_default()
+        )
+    }
+
+    /// Drop a cached avatar so it is fetched again on next use.
+    pub fn forget_avatar(&self, key: &str) {
+        self.avatars.borrow_mut().remove(key);
+    }
+
+    /// Our own MXID, if signed in.
+    pub fn own_id(&self) -> Option<String> {
+        self.client
+            .borrow()
+            .as_ref()
+            .and_then(|c| c.user_id().map(|u| u.to_string()))
+    }
+
+    /// Upload `path` as our profile picture (`None` removes it).
+    pub fn set_own_avatar(self: &Rc<Self>, path: Option<std::path::PathBuf>) {
+        let Some(client) = self.client.borrow().clone() else {
+            return;
+        };
+        let app = self.clone();
+        spawn_async(
+            async move {
+                match path {
+                    Some(p) => {
+                        let data = std::fs::read(&p)
+                            .map_err(|e| format!("could not read the image: {e}"))?;
+                        avatars::set_own_avatar(&client, &media::guess_mime(&p), data)
+                            .await
+                            .map_err(|e| e.to_string())
+                    }
+                    None => avatars::remove_own_avatar(&client)
+                        .await
+                        .map_err(|e| e.to_string()),
+                }
+            },
+            move |r| match r {
+                Ok(()) => {
+                    if let Some(me) = app.own_id() {
+                        app.forget_avatar(&format!("u:{me}"));
+                    }
+                    app.refresh();
+                }
+                Err(e) => ui::main_window::error_dialog(&app, &e),
+            },
+        );
     }
 
     pub fn refresh(self: &Rc<Self>) {

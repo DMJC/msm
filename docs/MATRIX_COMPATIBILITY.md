@@ -55,6 +55,10 @@ Files and images are sent as `m.file` / `m.image` (also received: audio, video a
 encrypts the upload and decrypts downloads. Filenames from other users are untrusted and sanitised before being used as paths.
 Limits: 50 MB upload, 100 MB declared download, 8 MB for inline previews.
 
+## Avatars
+Own picture is the standard Matrix profile `avatar_url` (uploaded media, so other clients see it). Other users' and rooms' avatars are fetched as
+server-scaled thumbnails and decoded defensively. Nicknames are unrelated and stay local.
+
 ## Group rooms and invitations
 Group rooms are joined rooms with no `m.direct` targets that are not spaces. New rooms are created private (`private_chat` preset)
 and encrypted. Invitations show the inviter and room name; declining uses a normal leave. Room-specific display names come

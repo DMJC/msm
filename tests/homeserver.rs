@@ -776,3 +776,48 @@ async fn attachments_round_trip_encrypted() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn avatar_set_fetch_and_remove() {
+    let Some(hs) = homeserver() else { return };
+    use msm::matrix::avatars;
+    let alice = login_as(&hs, "alice", "av-alice").await;
+    let bob = login_as(&hs, "bob", "av-bob").await;
+    let png: Vec<u8> = vec![
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8,
+        0xcf, 0xc0, 0xf0, 0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99, 0x3d, 0x1d, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    avatars::remove_own_avatar(&alice).await.unwrap();
+    assert!(
+        avatars::user_avatar(&bob, "@alice:localhost")
+            .await
+            .is_none()
+    );
+
+    avatars::set_own_avatar(&alice, &"image/png".parse().unwrap(), png)
+        .await
+        .unwrap();
+    let got = avatars::user_avatar(&bob, "@alice:localhost")
+        .await
+        .expect("bob sees alice's avatar");
+    assert!(got.len() > 8, "thumbnail bytes");
+
+    // Oversized uploads are refused locally, before any request.
+    let huge = vec![0u8; avatars::MAX_UPLOAD_BYTES + 1];
+    assert!(
+        avatars::set_own_avatar(&alice, &"image/png".parse().unwrap(), huge)
+            .await
+            .is_err()
+    );
+
+    avatars::remove_own_avatar(&alice).await.unwrap();
+    assert!(
+        avatars::user_avatar(&bob, "@alice:localhost")
+            .await
+            .is_none()
+    );
+}

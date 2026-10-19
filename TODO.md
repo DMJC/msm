@@ -28,7 +28,8 @@
 - [x] Redaction (delete own message), read receipts, unread counts
 - [x] Reactions, sending edits, emoji picker (verified vs Synapse + GUI)
 - [x] File/image attachments (encrypted round trip verified; GUI verified)
-- [ ] Avatars, in-conversation search, replies
+- [x] Avatars (own set/remove, contacts, rooms, headers; verified vs Synapse + GUI)
+- [ ] In-conversation search, replies
 - [ ] Integration tests vs local Synapse (partial: login, nickname sync, DM) + Element; full acceptance scenario
 - [ ] Packaging, user docs
 

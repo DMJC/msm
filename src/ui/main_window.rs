@@ -9,6 +9,7 @@ use crate::app::{App, now_ms};
 
 pub struct MainUi {
     name: gtk::Label,
+    me_avatar: gtk::Image,
     mxid: gtk::Label,
     status: gtk::Label,
     search: gtk::SearchEntry,
@@ -48,9 +49,28 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     let status = gtk::Label::new(Some("Connecting…"));
     status.set_xalign(0.0);
     status.style_context().add_class("dim-label");
+    let me_avatar = gtk::Image::from_pixbuf(Some(&crate::ui::avatar::placeholder("me")));
+    let me_button = gtk::Button::new();
+    me_button.set_relief(gtk::ReliefStyle::None);
+    me_button.set_tooltip_text(Some("Change your picture"));
+    me_button.add(&me_avatar);
+    let texts = gtk::Box::new(gtk::Orientation::Vertical, 0);
     for w in [&name, &mxid, &status] {
-        root.pack_start(w, false, false, 0);
+        texts.pack_start(w, false, false, 0);
     }
+    let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    head.pack_start(&me_button, false, false, 0);
+    head.pack_start(&texts, true, true, 0);
+    root.pack_start(&head, false, false, 0);
+    let a = app.clone();
+    me_button.connect_clicked(move |b| {
+        picture_menu(&a).popup_at_widget(
+            b,
+            gtk::gdk::Gravity::SouthWest,
+            gtk::gdk::Gravity::NorthWest,
+            None,
+        )
+    });
 
     let combo = gtk::ComboBoxText::new();
     for st in UiStatus::ALL {
@@ -180,6 +200,7 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
 
     *app.main_ui.borrow_mut() = Some(MainUi {
         name,
+        me_avatar,
         mxid,
         status,
         search,
@@ -248,6 +269,10 @@ pub fn show(app: &Rc<App>, me: &str) {
 pub fn refresh(app: &Rc<App>) {
     let ui = app.main_ui.borrow();
     let Some(ui) = ui.as_ref() else { return };
+    if let Some(me) = app.own_id() {
+        ui.me_avatar
+            .set_from_pixbuf(Some(&app.avatar(&format!("u:{me}"))));
+    }
     let query = ui.search.text().to_string();
     let view = view_signature(app, &query);
     if *ui.last_view.borrow() == view {
@@ -278,7 +303,7 @@ pub fn refresh(app: &Rc<App>) {
 /// Everything the list displays, as one string, to detect real changes.
 fn view_signature(app: &Rc<App>, query: &str) -> String {
     use std::fmt::Write;
-    let mut sig = format!("q={query}\n");
+    let mut sig = format!("q={query}\nav={}\n", app.avatar_gen.get());
     let mgr = app.mgr.borrow();
     let _ = writeln!(sig, "groups={:?}", mgr.document().groups);
     let pres = app.contact_presence.borrow();
@@ -306,7 +331,7 @@ fn view_signature(app: &Rc<App>, query: &str) -> String {
             let _ = writeln!(
                 sig,
                 "r|{}|{}|{}",
-                r.room_id(),
+                App::room_avatar_key(&r),
                 msm::matrix::rooms::cached_title(&r),
                 msm::matrix::rooms::unread_count(&r)
             );
@@ -390,8 +415,14 @@ fn add_rooms(app: &Rc<App>, list: &gtk::Box, query: &str) {
                 String::new()
             }
         ));
+        l.set_margin_start(0);
+        let pic = gtk::Image::from_pixbuf(Some(&app.avatar(&App::room_avatar_key(&room))));
+        let outer = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        outer.set_margin_start(16);
+        outer.pack_start(&pic, false, false, 0);
+        outer.pack_start(&l, true, true, 0);
         let ev = gtk::EventBox::new();
-        ev.add(&l);
+        ev.add(&outer);
         let (a, id) = (app.clone(), room.room_id().to_string());
         ev.connect_button_press_event(move |_, e| {
             if e.button() == 1 && e.event_type() == gtk::gdk::EventType::DoubleButtonPress {
@@ -473,10 +504,15 @@ fn contact_row(app: &Rc<App>, c: &Contact) -> gtk::Widget {
     sub.style_context().add_class("dim-label");
     row.pack_start(&l, false, false, 0);
     row.pack_start(&sub, false, false, 0);
-    row.set_margin_start(16);
+    let outer = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    outer.set_margin_start(16);
+    let pic = gtk::Image::from_pixbuf(Some(&app.avatar(&format!("u:{}", c.mxid))));
+    pic.set_valign(gtk::Align::Start);
+    outer.pack_start(&pic, false, false, 0);
+    outer.pack_start(&row, true, true, 0);
 
     let ev = gtk::EventBox::new();
-    ev.add(&row);
+    ev.add(&outer);
     let a = app.clone();
     let mxid = c.mxid.clone();
     ev.connect_button_press_event(move |_, e| {
@@ -488,6 +524,40 @@ fn contact_row(app: &Rc<App>, c: &Contact) -> gtk::Widget {
         gtk::glib::Propagation::Proceed
     });
     ev.upcast()
+}
+
+/// Menu under the avatar button: change or remove our profile picture.
+fn picture_menu(app: &Rc<App>) -> gtk::Menu {
+    let menu = gtk::Menu::new();
+    let a = app.clone();
+    menu.append(&item("Change picture…", move || choose_picture(&a)));
+    let a = app.clone();
+    menu.append(&item("Remove picture", move || a.set_own_avatar(None)));
+    menu.show_all();
+    menu
+}
+
+fn choose_picture(app: &Rc<App>) {
+    let d = gtk::FileChooserDialog::with_buttons(
+        Some("Choose a profile picture"),
+        Some(&app.window),
+        gtk::FileChooserAction::Open,
+        &[
+            ("Cancel", gtk::ResponseType::Cancel),
+            ("Use picture", gtk::ResponseType::Accept),
+        ],
+    );
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some("Images"));
+    filter.add_mime_type("image/*");
+    d.add_filter(filter);
+    let chosen = (d.run() == gtk::ResponseType::Accept)
+        .then(|| d.filename())
+        .flatten();
+    d.close();
+    if let Some(path) = chosen {
+        app.set_own_avatar(Some(path));
+    }
 }
 
 fn item(label: &str, f: impl Fn() + 'static) -> gtk::MenuItem {

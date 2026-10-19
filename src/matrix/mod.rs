@@ -1,4 +1,5 @@
 pub mod authentication;
+pub mod avatars;
 pub mod contacts_sync;
 pub mod encryption;
 pub mod media;
