@@ -231,6 +231,18 @@ impl App {
             }
         });
 
+        // Other people's profile pictures changing while we are running.
+        let (atx, arx) = async_channel::unbounded();
+        avatars::watch_changes(&client, atx);
+        let app = self.clone();
+        glib::MainContext::default().spawn_local(async move {
+            while let Ok(mxid) = arx.recv().await {
+                app.forget_avatar(&format!("u:{mxid}"));
+                app.avatar_gen.set(app.avatar_gen.get() + 1);
+                ui::main_window::refresh(&app);
+            }
+        });
+
         ui::main_window::show(self, &me);
         // Own display name.
         let c = client.clone();

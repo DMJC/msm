@@ -1295,3 +1295,53 @@ async fn history_pagination_ends_at_the_start_of_the_room() {
     );
     assert!(seen.len() >= 12);
 }
+
+#[tokio::test]
+async fn avatar_change_in_a_shared_room_is_reported() {
+    let Some(hs) = homeserver() else { return };
+    use msm::matrix::{avatars, rooms};
+    let alice = login_as(&hs, "alice", "avw-alice").await;
+    let bob = login_as(&hs, "bob", "avw-bob").await;
+    let room = rooms::create_group(
+        &alice,
+        &format!("Avatar watch {}", std::process::id()),
+        &["@bob:localhost".into()],
+    )
+    .await
+    .unwrap();
+    for _ in 0..10 {
+        sync_a_bit(&bob).await;
+        if let Some(r) = bob
+            .get_room(room.room_id())
+            .filter(|r| r.state() == matrix_sdk::RoomState::Invited)
+        {
+            r.join().await.unwrap();
+            break;
+        }
+    }
+    sync_a_bit(&bob).await;
+
+    let (tx, rx) = async_channel::unbounded();
+    avatars::watch_changes(&bob, tx);
+    let png: Vec<u8> = vec![
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8,
+        0xcf, 0xc0, 0xf0, 0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99, 0x3d, 0x1d, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+    avatars::set_own_avatar(&alice, &"image/png".parse().unwrap(), png)
+        .await
+        .unwrap();
+
+    let mut who = None;
+    for _ in 0..15 {
+        sync_a_bit(&bob).await;
+        if let Ok(m) = rx.try_recv() {
+            who = Some(m);
+            break;
+        }
+    }
+    assert_eq!(who.as_deref(), Some("@alice:localhost"));
+    let _ = avatars::remove_own_avatar(&alice).await;
+}

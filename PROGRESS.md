@@ -183,12 +183,16 @@ UI is still a placeholder window.
 - "Load older messages" no longer shows when the first page already reached the start of the room (`load_history` drops the continuation token for a short page). Integration test `history_pagination_ends_at_the_start_of_the_room` (paging terminates, nothing older for a short room). Not re-checked in the GUI.
 - Tests: 59 unit + 3 bin + 19 integration (the new one takes about a minute because of Synapse's send rate limit).
 
+## Session 17
+- Other users' avatar changes show up live: `avatars::watch_changes` reports a member event whose avatar differs from `prev_content`; the app drops the cached `u:<mxid>` avatar and refreshes. Integration test `avatar_change_in_a_shared_room_is_reported` passes (2 avatar tests, clippy clean); full suite and the GUI not re-run.
+- Verification-request unread count: investigated, it is SDK/server behaviour, left as a known problem.
+
 ## Known problems / not verified
 - Verification needs both sides to already know each other's keys (e.g. a shared room) and the peer to have accepted the DM. The green ✔ states are not GUI-verified.
-- The verification-request message in the DM counts as an unread message.
+- The verification-request message in the DM counts as an unread message. This comes from the SDK's client-side unread count (any `m.room.message` from another user counts) and the server's count; not fixed.
 - QR-code verification and verifying with a recovery key from a new device UI are not implemented.
 - Search covers only messages already loaded (no server-side search); replies to unloaded messages show "an earlier message"; no jump-to-original.
-- Other users' avatar changes are only noticed after restart (user avatars are cached for the session); no initials on placeholders; no avatar zoom/preview.
+- Other users' avatar changes are now noticed live (Session 17: member-event watcher drops the cached avatar; integration test only, not seen in the GUI); no initials on placeholders; no avatar zoom/preview.
 - Image previews decode untrusted data with gdk-pixbuf (size-limited, failures ignored); "Open" hands files to the default application, as other clients do.
 - No upload progress / cancel, no drag-and-drop or paste-image, no thumbnails sent with images, no audio/video playback (they appear as files).
 - Attachments verified against Synapse and this client only (no Element).

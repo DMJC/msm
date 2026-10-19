@@ -94,6 +94,29 @@ pub async fn remove_own_avatar(client: &Client) -> Result<(), AvatarError> {
     client.account().set_avatar_url(None).await.map_err(mx)
 }
 
+/// Reports the MXID of every user whose profile picture changed in a room we are in,
+/// so cached avatars can be dropped instead of staying stale until a restart.
+pub fn watch_changes(client: &Client, tx: async_channel::Sender<String>) {
+    use matrix_sdk::ruma::events::room::member::{MembershipState, SyncRoomMemberEvent};
+    client.add_event_handler(move |ev: SyncRoomMemberEvent| {
+        let tx = tx.clone();
+        async move {
+            let Some(ev) = ev.as_original() else { return };
+            if ev.content.membership != MembershipState::Join {
+                return;
+            }
+            let before = ev
+                .unsigned
+                .prev_content
+                .as_ref()
+                .map(|p| p.avatar_url.clone());
+            if before.is_some_and(|b| b != ev.content.avatar_url) {
+                let _ = tx.send(ev.state_key.to_string()).await;
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
