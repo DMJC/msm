@@ -17,7 +17,7 @@
 - [ ] Ignored-user block/unblock
 - [ ] Create a calendar where users can send each other event invites but a user must tentatively accept an invite for it to be added to their calendar. They can RSVP to an invite.
 ## Phase 5+
-- [x] DM discovery (m.direct), messaging, conversation UI, typing (verified vs Synapse and in the GUI; not vs Element)
+- [x] DM discovery (m.direct), messaging, conversation UI, typing (verified vs Synapse and in the GUI; text, replies, edits, reactions, redactions also vs Element Web)
 - [x] Group rooms/invites: list, create, invite, accept/decline, leave, room windows (verified vs Synapse + GUI)
 - [ ] Membership management beyond invite/leave (kick/ban, room settings)
 - [x] Own status + tray + presence publishing (verified vs Synapse and on Wayland/MATE panel)
@@ -32,7 +32,7 @@
 - [x] File/image attachments (encrypted round trip verified; GUI verified)
 - [x] Avatars (own set/remove, contacts, rooms, headers; verified vs Synapse + GUI)
 - [x] In-conversation search (loaded messages), replies (verified vs Synapse + GUI)
-- [ ] Integration tests vs local Synapse (partial: login, nickname sync, DM) + Element; full acceptance scenario
+- [x] Integration tests vs local Synapse (17 tests) and an Element Web interop run (text, replies, edits, reactions, redactions); [ ] Element checks for attachments, avatars, verification, presence
 - [ ] Packaging, user docs
 
 ## Platform

@@ -166,6 +166,10 @@ UI is still a placeholder window.
   - Verified: 4 manager unit tests + parse test, integration test (request, accept, remove across two real accounts; no room/invite created), GUI (bob's request showed in the section, Accept turned it into 👥 and bob received the accept).
   - Limits: to-device messages reach only the recipient's devices that exist at send time (a device added later doesn't see an old request; "Resend friend request" covers it); the sender's side cannot tell a request was never delivered (no read ack).
 - Three-account scenario (automated): `three_accounts_in_a_group_keep_independent_nicknames` registers alice/bob/carol, group room, everyone messages; each resolves the others by their own private nicknames, nicknames are stored only in their owner's account data, and public profiles/room member names are unchanged. Not run through the GUI with three live windows.
+- Third-party interop (Element Web 1.12.32 in headless Chrome, driven with puppeteer, against local Synapse; msm library as the other side, since the GTK window can't share the headless run):
+  - Verified both ways in an encrypted DM: msm-created DM is shown by Element as a direct chat invitation ("wants to chat"), Element decrypts msm's message; msm decrypts Element's messages; Element reply (`m.in_reply_to`) parsed with correct target; Element edit applied (`edited=true`, new text); Element reaction read; msm reply renders with quote in Element, msm reaction shows as a ❤️ pill, msm edit shows "(edited)", msm redaction shows "Message deleted".
+  - Observed: every fresh login is a new device and cannot read earlier encrypted history (expected). Element flags msm's messages with a red shield (msm device not cross-signed).
+  - Not covered: attachments, avatars, SAS verification and presence against Element; the GTK window itself was not used in this run.
 - Tests: 59 unit + 3 bin + 17 integration pass; clippy/fmt clean.
 
 ## Known problems / not verified
@@ -183,4 +187,4 @@ UI is still a placeholder window.
 - "Load older messages" can show when nothing older exists. Contact cache assumes a single account.
 
 ## Exact next task
-1. Third-party interop test (Element Web vs local Synapse); optional three-account GUI run.
+1. Remaining interop checks vs Element (attachments, avatars, SAS verification, presence); optional three-account GUI run; kick/ban and room settings.
