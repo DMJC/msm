@@ -133,8 +133,13 @@ async fn dm_round_trip() {
         for r in dark.invited_rooms() {
             r.join().await.unwrap();
         }
-        if let Ok(m) = tokio::time::timeout(Duration::from_millis(300), rx.recv()).await {
-            got = m.ok();
+        // Parallel tests share accounts, so skip other tests' messages.
+        while let Ok(m) = rx.try_recv() {
+            if m == text {
+                got = Some(m);
+            }
+        }
+        if got.is_some() {
             break;
         }
     }
@@ -176,4 +181,138 @@ async fn session_persists_restores_and_logout_wipes() {
             .is_none()
     );
     assert!(!dir.join("matrix-store").exists());
+}
+
+use msm::matrix::messages::{Conversation, Parsed};
+use msm::matrix::rooms;
+
+async fn sync_a_bit(c: &Client) {
+    c.sync_once(SyncSettings::default().timeout(Duration::from_secs(1)))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn dm_discovery_reuses_existing_room_and_peer_sees_it_as_dm() {
+    let Some(hs) = homeserver() else { return };
+    let alice = login_as(&hs, "alice", "disc-alice").await;
+    let dark = login_as(&hs, "darkmage", "disc-dark").await;
+    sync_a_bit(&alice).await;
+
+    let first = rooms::open_or_create_dm(&alice, "@darkmage:localhost")
+        .await
+        .unwrap();
+    sync_a_bit(&alice).await;
+    let second = rooms::open_or_create_dm(&alice, "@darkmage:localhost")
+        .await
+        .unwrap();
+    // An earlier test run may have left other DMs; whichever is chosen must be stable.
+    let again = rooms::open_or_create_dm(&alice, "@darkmage:localhost")
+        .await
+        .unwrap();
+    assert_eq!(second.room_id(), again.room_id());
+    assert!(
+        rooms::existing_dms(&alice, "@darkmage:localhost")
+            .unwrap()
+            .len()
+            >= 1
+    );
+    let _ = first;
+
+    // Bob's invite from another client: Darkmage joins and recognises it as a DM with Alice.
+    sync_a_bit(&dark).await;
+    for r in dark.invited_rooms() {
+        r.join().await.unwrap();
+    }
+    sync_a_bit(&dark).await;
+    sync_a_bit(&dark).await;
+    assert!(
+        !rooms::existing_dms(&dark, "@alice:localhost")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(rooms::existing_dms(&dark, "not-an-id").is_err());
+}
+
+#[tokio::test]
+async fn retry_is_idempotent_history_and_redaction() {
+    let Some(hs) = homeserver() else { return };
+    let alice = login_as(&hs, "alice", "hist-alice").await;
+    let dark = login_as(&hs, "darkmage", "hist-dark").await;
+    let room = alice
+        .create_dm(<&UserId>::try_from("@darkmage:localhost").unwrap())
+        .await
+        .unwrap();
+
+    let body = format!("retry-test {}", std::process::id());
+    let txn = matrix_sdk::ruma::TransactionId::new();
+    let e1 = rooms::send_text(&room, &body, txn.clone()).await.unwrap();
+    let e2 = rooms::send_text(&room, &body, txn).await.unwrap(); // simulated retry
+    assert_eq!(e1, e2, "same txn id must not create a second event");
+
+    let hist = rooms::load_history(&room, None, 20).await.unwrap();
+    let mut conv = Conversation::default();
+    for ev in hist.events {
+        conv.apply(ev);
+    }
+    assert_eq!(conv.messages().iter().filter(|m| m.body == body).count(), 1);
+
+    rooms::redact(&room, &e1).await.unwrap();
+    let hist = rooms::load_history(&room, None, 20).await.unwrap();
+    let mut conv = Conversation::default();
+    for ev in hist.events {
+        conv.apply(ev);
+    }
+    let m = conv
+        .messages()
+        .iter()
+        .find(|m| m.id == e1)
+        .expect("redacted event present");
+    assert!(m.redacted && m.body.is_empty());
+    let _ = (
+        dark,
+        Parsed::Redaction {
+            target: String::new(),
+        },
+    );
+}
+
+#[tokio::test]
+async fn live_feed_delivers_decrypted_messages_and_typing() {
+    let Some(hs) = homeserver() else { return };
+    let alice = login_as(&hs, "alice", "live-alice").await;
+    let dark = login_as(&hs, "darkmage", "live-dark").await;
+    let (tx, rx) = async_channel::unbounded();
+    rooms::forward_live_events(&dark, tx);
+    let room = alice
+        .create_dm(<&UserId>::try_from("@darkmage:localhost").unwrap())
+        .await
+        .unwrap();
+    sync_a_bit(&dark).await;
+    for r in dark.invited_rooms() {
+        r.join().await.unwrap();
+    }
+    let body = format!("live {}", std::process::id());
+    rooms::send_text(&room, &body, matrix_sdk::ruma::TransactionId::new())
+        .await
+        .unwrap();
+    let mut seen = false;
+    for _ in 0..10 {
+        sync_a_bit(&dark).await;
+        while let Ok(ev) = rx.try_recv() {
+            if let rooms::LiveEvent::Timeline {
+                event: Parsed::Message(m),
+                ..
+            } = ev
+                && m.body == body
+                && !m.undecryptable
+            {
+                seen = true;
+            }
+        }
+        if seen {
+            break;
+        }
+    }
+    assert!(seen, "decrypted live message not received");
 }
