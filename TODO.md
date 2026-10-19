@@ -15,6 +15,7 @@
 - [x] Account-data read/write with merge, verified across two installations vs Synapse
 - [x] Contact list UI, nickname editing UI using resolver (launch-verified; interactions not exercised)
 - [ ] Ignored-user block/unblock
+- [ ] Create a calendar where users can send each other event invites but a user must tentatively accept an invite for it to be added to their calendar. They can RSVP to an invite.
 ## Phase 5+
 - [x] DM discovery (m.direct), messaging, conversation UI, typing (verified vs Synapse and in the GUI; not vs Element)
 - [x] Group rooms/invites: list, create, invite, accept/decline, leave, room windows (verified vs Synapse + GUI)
@@ -24,7 +25,8 @@
 - [ ] Contact presence display verified with two users sharing a room
 - [ ] Friend requests
 - [x] Cross-signing + recovery key + key backup (verified vs Synapse and in the GUI)
-- [ ] Interactive device verification (SAS), per-message encryption indicators
+- [x] Interactive emoji (SAS) verification (verified vs Synapse + GUI)
+- [ ] Per-message encryption indicators, verified badges
 - [x] Redaction (delete own message), read receipts, unread counts
 - [x] Reactions, sending edits, emoji picker (verified vs Synapse + GUI)
 - [x] File/image attachments (encrypted round trip verified; GUI verified)

@@ -518,6 +518,8 @@ fn contact_row(app: &Rc<App>, c: &Contact) -> gtk::Widget {
     ev.connect_button_press_event(move |_, e| {
         if e.button() == 3 {
             contact_menu(&a, &mxid).popup_at_pointer(Some(e));
+            // Don't let the enclosing group's menu open as well.
+            return gtk::glib::Propagation::Stop;
         } else if e.button() == 1 && e.event_type() == gtk::gdk::EventType::DoubleButtonPress {
             a.open_conversation(&mxid);
         }
@@ -578,6 +580,10 @@ fn contact_menu(app: &Rc<App>, mxid: &str) -> gtk::Menu {
 
     let (a, id) = (app.clone(), mxid.to_owned());
     menu.append(&item("Send message", move || a.open_conversation(&id)));
+    let (a, id) = (app.clone(), mxid.to_owned());
+    menu.append(&item("Verify…", move || {
+        crate::ui::verification_dialog::start(&a, &id)
+    }));
     let (a, id) = (app.clone(), mxid.to_owned());
     menu.append(&item("Rename…", move || {
         let current = a

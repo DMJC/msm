@@ -8,3 +8,4 @@ pub mod presence;
 pub mod rooms;
 pub mod secrets;
 pub mod synchronization;
+pub mod verification;

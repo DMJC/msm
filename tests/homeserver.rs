@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 //! Integration tests against a real homeserver. Skipped unless
 //! `MSM_TEST_HOMESERVER` (e.g. http://localhost:8008) is set. Expects accounts
 //! alice / bob / darkmage with password `pw-<name>-123` to exist.
@@ -838,4 +839,159 @@ async fn avatar_set_fetch_and_remove() {
             .await
             .is_none()
     );
+}
+
+async fn next_ui(
+    f: &mut msm::matrix::verification::Flow,
+    want: impl Fn(&msm::matrix::verification::VerifyUi) -> bool,
+) -> msm::matrix::verification::VerifyUi {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while let Some(u) = f.ui.recv().await {
+            if want(&u) {
+                return u;
+            }
+        }
+        panic!("flow ended early");
+    })
+    .await
+    .expect("timed out waiting for verification state")
+}
+
+#[tokio::test]
+async fn emoji_verification_between_two_users() {
+    use msm::matrix::encryption;
+    use msm::matrix::verification::{self, VerifyCmd, VerifyUi};
+    let Some(hs) = homeserver() else { return };
+    let (alice, _, apw) = register_fresh(&hs).await;
+    let (bob, _, bpw) = register_fresh(&hs).await;
+    encryption::setup_recovery(&alice, &apw).await.unwrap();
+    encryption::setup_recovery(&bob, &bpw).await.unwrap();
+    let bob_id = bob.user_id().unwrap().to_string();
+
+    let (tx, rx) = async_channel::unbounded();
+    verification::watch_incoming(&bob, tx);
+    for c in [&alice, &bob] {
+        let c = c.clone();
+        tokio::spawn(async move {
+            let _ = c.sync(SyncSettings::default()).await;
+        });
+    }
+    // The request travels in a DM, which Bob has to accept first (as a user would).
+    let b2 = bob.clone();
+    tokio::spawn(async move {
+        loop {
+            for r in b2.invited_rooms() {
+                let _ = r.join().await;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    });
+
+    // Each side must already know the other's keys, as it would after any shared room.
+    bob.encryption()
+        .request_user_identity(alice.user_id().unwrap())
+        .await
+        .unwrap();
+    let req = verification::request(&alice, &bob_id).await.unwrap();
+    let mut af = verification::run(req);
+    let incoming = tokio::time::timeout(Duration::from_secs(60), rx.recv())
+        .await
+        .expect("bob sees the request")
+        .unwrap();
+    let mut bf = verification::run(incoming);
+    assert!(!bf.self_verification);
+    next_ui(&mut bf, |u| *u == VerifyUi::Requested).await;
+    bf.cmd.send(VerifyCmd::Accept).unwrap();
+
+    let VerifyUi::Emojis(ea) = next_ui(&mut af, |u| matches!(u, VerifyUi::Emojis(_))).await else {
+        unreachable!()
+    };
+    let VerifyUi::Emojis(eb) = next_ui(&mut bf, |u| matches!(u, VerifyUi::Emojis(_))).await else {
+        unreachable!()
+    };
+    assert_eq!(ea.len(), 7);
+    assert_eq!(ea, eb, "both sides must show the same emoji");
+
+    // Nothing is verified until a person confirms.
+    let id = alice
+        .encryption()
+        .get_user_identity(bob.user_id().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!id.is_verified());
+    af.cmd.send(VerifyCmd::Match).unwrap();
+    bf.cmd.send(VerifyCmd::Match).unwrap();
+    next_ui(&mut af, |u| *u == VerifyUi::Done).await;
+    next_ui(&mut bf, |u| *u == VerifyUi::Done).await;
+    // Trust is recorded just after the flow reports Done.
+    let mut trusted = false;
+    for _ in 0..40 {
+        let id = alice
+            .encryption()
+            .get_user_identity(bob.user_id().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        if id.is_verified() {
+            trusted = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(trusted, "alice now trusts bob");
+}
+
+#[tokio::test]
+async fn emoji_mismatch_cancels_without_verifying() {
+    use msm::matrix::encryption;
+    use msm::matrix::verification::{self, VerifyCmd, VerifyUi};
+    let Some(hs) = homeserver() else { return };
+    let (alice, _, apw) = register_fresh(&hs).await;
+    let (bob, _, bpw) = register_fresh(&hs).await;
+    encryption::setup_recovery(&alice, &apw).await.unwrap();
+    encryption::setup_recovery(&bob, &bpw).await.unwrap();
+    let bob_id = bob.user_id().unwrap().to_string();
+    let (tx, rx) = async_channel::unbounded();
+    verification::watch_incoming(&bob, tx);
+    for c in [&alice, &bob] {
+        let c = c.clone();
+        tokio::spawn(async move {
+            let _ = c.sync(SyncSettings::default()).await;
+        });
+    }
+    // The request travels in a DM, which Bob has to accept first (as a user would).
+    let b2 = bob.clone();
+    tokio::spawn(async move {
+        loop {
+            for r in b2.invited_rooms() {
+                let _ = r.join().await;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    });
+    bob.encryption()
+        .request_user_identity(alice.user_id().unwrap())
+        .await
+        .unwrap();
+    let mut af = verification::run(verification::request(&alice, &bob_id).await.unwrap());
+    let incoming = tokio::time::timeout(Duration::from_secs(60), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut bf = verification::run(incoming);
+    next_ui(&mut bf, |u| *u == VerifyUi::Requested).await;
+    bf.cmd.send(VerifyCmd::Accept).unwrap();
+    next_ui(&mut af, |u| matches!(u, VerifyUi::Emojis(_))).await;
+    next_ui(&mut bf, |u| matches!(u, VerifyUi::Emojis(_))).await;
+    af.cmd.send(VerifyCmd::Mismatch).unwrap();
+    next_ui(&mut af, |u| matches!(u, VerifyUi::Cancelled(_))).await;
+    next_ui(&mut bf, |u| matches!(u, VerifyUi::Cancelled(_))).await;
+    let id = alice
+        .encryption()
+        .get_user_identity(bob.user_id().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!id.is_verified());
 }

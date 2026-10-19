@@ -137,17 +137,31 @@ UI is still a placeholder window.
   - Verified: unit tests, integration test (encrypted reply relation round trip, search match), and the GUI (reply bar, quote persisted across restart, search "1 found").
 - Tests: 54 unit + 3 bin + 13 integration pass; clippy/fmt clean.
 
+## Session 12
+- Phase 9: interactive emoji (SAS) verification.
+  - `matrix::verification`: `request` / `request_self`, `watch_incoming` (to-device and in-room requests; retries the SDK lookup briefly), `run` -> `Flow`
+    (UI states Waiting/Requested/Starting/Emojis/Confirmed/Done/Cancelled; commands Accept/Match/Mismatch/Cancel). Only a user command confirms a match.
+  - UI: verification window with the 7 emoji and names, "They match" / "They don't match" / Cancel; opens automatically for incoming requests;
+    entry points: contact menu "Verify...", Security dialog "Verify another device...".
+  - Fixed: right-clicking a contact also opened the enclosing group's menu.
+  - Verified: integration tests (two fresh encrypted accounts: identical emoji both sides, nothing trusted before confirm, trust after confirm; mismatch cancels both sides without trust)
+    and the GUI (nested X server): contact > Verify..., emoji identical to the second client's log, "Verified." after both confirmed.
+- Tests: 54 unit + 3 bin + 15 integration pass; clippy/fmt clean.
+
 ## Known problems / not verified
+- Verification needs both sides to already know each other's keys (e.g. a shared room) and the peer to have accepted the DM; the app does not yet show a trust badge for verified users and has no per-message encryption indicators or verified badges.
+- The verification-request message in the DM counts as an unread message.
+- QR-code verification and verifying with a recovery key from a new device UI are not implemented.
 - Search covers only messages already loaded (no server-side search); replies to unloaded messages show "an earlier message"; no jump-to-original.
 - Other users' avatar changes are only noticed after restart (user avatars are cached for the session); no initials on placeholders; no avatar zoom/preview.
 - Image previews decode untrusted data with gdk-pixbuf (size-limited, failures ignored); "Open" hands files to the default application, as other clients do.
 - No upload progress / cancel, no drag-and-drop or paste-image, no thumbnails sent with images, no audio/video playback (they appear as files).
 - Attachments verified against Synapse and this client only (no Element).
-- No interactive device verification (SAS), no per-message encryption indicators.
+- No interactive device verification (SAS), no per-message encryption indicators or verified badges.
 - Not implemented: friend requests, kick/ban and room settings, recovery reset/disable.
 - The three-account GUI acceptance scenario has not been run end to end; hide-to-tray via a real close click and the installed .desktop icon are unverified on the user's panel.
 - "Load older messages" can show when nothing older exists. Contact cache assumes a single account.
 
 ## Exact next task
-1. Interactive verification (SAS emoji) + per-message encryption indicators.
+1. Per-message encryption indicators and a verified badge on contacts/devices (use SDK encryption info).
 2. Friend requests; third-party interop test (Element Web vs local Synapse); three-account acceptance scenario.

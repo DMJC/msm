@@ -48,6 +48,16 @@ pub fn open(app: &Rc<App>) {
     let enter = gtk::Button::with_label("Enter recovery key…");
     area.pack_start(&setup, false, false, 0);
     area.pack_start(&enter, false, false, 0);
+    let verify_other = gtk::Button::with_label("Verify another device…");
+    area.pack_start(&verify_other, false, false, 0);
+    {
+        let app = app.clone();
+        verify_other.connect_clicked(move |_| {
+            if let Some(me) = app.own_id() {
+                crate::ui::verification_dialog::start(&app, &me);
+            }
+        });
+    }
 
     let reload = {
         let (client, summary, devices) = (client.clone(), summary.clone(), devices.clone());

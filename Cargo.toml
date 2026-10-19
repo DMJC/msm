@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 async-channel = "2.5.0"
 directories = "6.0.0"
+futures-util = "0.3.34"
 getrandom = "0.4.3"
 gtk = "0.19"
 ksni = "0.3.6"

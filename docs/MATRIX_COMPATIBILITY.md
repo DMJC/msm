@@ -50,6 +50,9 @@ Reactions are standard `m.reaction` annotations (removing one redacts the reacti
 Per spec an edit is honoured only if it comes from the original message's sender; the newest edit wins regardless of arrival order.
 Verified between two accounts on Synapse, including that another user's "edit" is ignored.
 
+## Verification
+Emoji (SAS v1) verification of users and our own devices uses the standard `m.key.verification.*` flow (in-room for users, to-device for own devices), so it interoperates with other clients. Not implemented: QR codes.
+
 ## Replies
 Replies use the standard `m.relates_to` / `m.in_reply_to` relation, so other clients show them as replies. We do not add the legacy quoted-text fallback.
 
