@@ -29,7 +29,7 @@
 - [x] Reactions, sending edits, emoji picker (verified vs Synapse + GUI)
 - [x] File/image attachments (encrypted round trip verified; GUI verified)
 - [x] Avatars (own set/remove, contacts, rooms, headers; verified vs Synapse + GUI)
-- [ ] In-conversation search, replies
+- [x] In-conversation search (loaded messages), replies (verified vs Synapse + GUI)
 - [ ] Integration tests vs local Synapse (partial: login, nickname sync, DM) + Element; full acceptance scenario
 - [ ] Packaging, user docs
 

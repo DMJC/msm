@@ -47,6 +47,13 @@ pub struct ConversationWindow {
     older: RefCell<Option<String>>,
     older_button: gtk::Button,
     i_am_typing: RefCell<bool>,
+    /// Message being replied to: (event id, preview).
+    reply_to: RefCell<Option<(String, String)>>,
+    reply_bar: gtk::Box,
+    reply_label: gtk::Label,
+    search_row: gtk::Box,
+    search: gtk::SearchEntry,
+    search_count: gtk::Label,
 }
 
 pub fn open(app: &Rc<App>, room: Room, peer: Option<&str>) {
@@ -80,6 +87,9 @@ impl ConversationWindow {
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         head.pack_start(&avatar, false, false, 0);
         head.pack_start(&title, true, true, 0);
+        let search_btn = gtk::Button::with_label("🔍");
+        search_btn.set_tooltip_text(Some("Search this conversation (Ctrl+F)"));
+        head.pack_start(&search_btn, false, false, 0);
         root.pack_start(&head, false, false, 0);
         root.pack_start(&encrypted, false, false, 0);
         let is_room = peer.is_none();
@@ -94,6 +104,17 @@ impl ConversationWindow {
             root.pack_start(&controls, false, false, 0);
         }
 
+        let search = gtk::SearchEntry::new();
+        search.set_placeholder_text(Some("Search loaded messages"));
+        let search_count = gtk::Label::new(None);
+        search_count.style_context().add_class("dim-label");
+        let search_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        search_row.pack_start(&search, true, true, 0);
+        search_row.pack_start(&search_count, false, false, 0);
+        search_row.set_no_show_all(true);
+        search_row.set_visible(false);
+        root.pack_start(&search_row, false, false, 0);
+
         let older_button = gtk::Button::with_label("Load older messages");
         older_button.set_no_show_all(true);
         older_button.set_visible(false);
@@ -107,6 +128,19 @@ impl ConversationWindow {
         typing.set_xalign(0.0);
         typing.style_context().add_class("dim-label");
         root.pack_start(&typing, false, false, 0);
+
+        let reply_label = gtk::Label::new(None);
+        reply_label.set_xalign(0.0);
+        reply_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        let reply_cancel = gtk::Button::with_label("✕");
+        reply_cancel.set_relief(gtk::ReliefStyle::None);
+        reply_cancel.set_tooltip_text(Some("Cancel reply"));
+        let reply_bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        reply_bar.pack_start(&reply_label, true, true, 0);
+        reply_bar.pack_start(&reply_cancel, false, false, 0);
+        reply_bar.set_no_show_all(true);
+        reply_bar.set_visible(false);
+        root.pack_start(&reply_bar, false, false, 0);
 
         let buffer = gtk::TextBuffer::new(None::<&gtk::TextTagTable>);
         let input = gtk::TextView::with_buffer(&buffer);
@@ -158,6 +192,29 @@ impl ConversationWindow {
             older: RefCell::new(None),
             older_button,
             i_am_typing: RefCell::new(false),
+            reply_to: RefCell::new(None),
+            reply_bar,
+            reply_label,
+            search_row,
+            search,
+            search_count,
+        });
+
+        let c = cw.clone();
+        reply_cancel.connect_clicked(move |_| c.set_reply(None));
+        let c = cw.clone();
+        search_btn.connect_clicked(move |_| c.toggle_search());
+        let c = cw.clone();
+        cw.search.connect_search_changed(move |_| c.redraw(false));
+        let c = cw.clone();
+        cw.window.connect_key_press_event(move |_, e| {
+            if e.state().contains(gdk::ModifierType::CONTROL_MASK)
+                && e.keyval() == gdk::keys::constants::f
+            {
+                c.toggle_search();
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
         });
 
         let c = cw.clone();
@@ -450,21 +507,55 @@ impl ConversationWindow {
             return;
         }
         buf.set_text("");
+        let reply = self.reply_to.borrow().as_ref().map(|(id, _)| id.clone());
+        self.set_reply(None);
         let txn = matrix_sdk::ruma::TransactionId::new();
-        self.conv
-            .borrow_mut()
-            .add_pending(txn.as_str(), &self.me(), &body, now_ms());
+        self.conv.borrow_mut().add_pending(
+            txn.as_str(),
+            &self.me(),
+            &body,
+            now_ms(),
+            reply.as_deref(),
+        );
         self.redraw(true);
-        self.deliver(txn.to_string(), body);
+        self.deliver(txn.to_string(), body, reply);
     }
 
-    fn deliver(self: &Rc<Self>, txn: String, body: String) {
+    fn set_reply(&self, target: Option<(String, String)>) {
+        match &target {
+            Some((_, preview)) => {
+                self.reply_label.set_markup(&format!(
+                    "↪ Replying to <i>{}</i>",
+                    glib::markup_escape_text(preview)
+                ));
+                self.reply_bar.set_no_show_all(false);
+                self.reply_bar.show_all();
+                self.input.grab_focus();
+            }
+            None => self.reply_bar.hide(),
+        }
+        *self.reply_to.borrow_mut() = target;
+    }
+
+    fn toggle_search(self: &Rc<Self>) {
+        if self.search_row.is_visible() {
+            self.search.set_text("");
+            self.search_row.hide();
+            self.redraw(false);
+        } else {
+            self.search_row.set_no_show_all(false);
+            self.search_row.show_all();
+            self.search.grab_focus();
+        }
+    }
+
+    fn deliver(self: &Rc<Self>, txn: String, body: String, reply: Option<String>) {
         let room = self.room.clone();
         let this = self.clone();
         let txn_id = OwnedTransactionId::from(txn.as_str());
         spawn_async(
             async move {
-                rooms::send_text(&room, &body, txn_id)
+                rooms::send_text(&room, &body, txn_id, reply.as_deref())
                     .await
                     .map_err(|e| e.to_string())
             },
@@ -479,17 +570,17 @@ impl ConversationWindow {
     }
 
     fn retry(self: &Rc<Self>, txn: &str) {
-        let body = self
+        let found = self
             .conv
             .borrow()
             .messages()
             .iter()
             .find(|m| m.txn_id.as_deref() == Some(txn))
-            .map(|m| m.body.clone());
-        if let Some(body) = body {
+            .map(|m| (m.body.clone(), m.reply_to.clone()));
+        if let Some((body, reply)) = found {
             self.conv.borrow_mut().mark_pending(txn);
             self.redraw(false);
-            self.deliver(txn.to_owned(), body);
+            self.deliver(txn.to_owned(), body, reply);
         }
     }
 
@@ -515,7 +606,21 @@ impl ConversationWindow {
             }
         }
         let me = self.me();
-        let msgs: Vec<ChatMessage> = self.conv.borrow().messages().to_vec();
+        let query = self.search.text().to_string();
+        let searching = !query.trim().is_empty();
+        let msgs: Vec<ChatMessage> = self
+            .conv
+            .borrow()
+            .messages()
+            .iter()
+            .filter(|m| !searching || m.matches(&query))
+            .cloned()
+            .collect();
+        self.search_count.set_text(&if searching {
+            format!("{} found", msgs.len())
+        } else {
+            String::new()
+        });
         for m in &msgs {
             self.list
                 .pack_start(&self.message_row(m, &me), false, false, 0);
@@ -617,6 +722,23 @@ impl ConversationWindow {
         }
 
         let outer = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        if let Some(target) = &m.reply_to {
+            let quote = gtk::Label::new(None);
+            quote.set_xalign(0.0);
+            quote.set_margin_start(16);
+            quote.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            quote.style_context().add_class("dim-label");
+            let text = match self.conv.borrow().find(target) {
+                Some(orig) => format!(
+                    "↪ <b>{}</b>: {}",
+                    glib::markup_escape_text(&self.name_of(&orig.sender)),
+                    glib::markup_escape_text(&orig.snippet(80))
+                ),
+                None => "↪ an earlier message".to_owned(),
+            };
+            quote.set_markup(&format!("<small>{text}</small>"));
+            outer.pack_start(&quote, false, false, 0);
+        }
         outer.pack_start(&row, false, false, 0);
         if let (Some(att), false) = (&m.attachment, m.redacted)
             && att.kind == AttachmentKind::Image
@@ -642,6 +764,10 @@ impl ConversationWindow {
         }
         react.set_submenu(Some(&sub));
         menu.append(&react);
+        let (this, id, preview) = (self.clone(), m.id.clone(), m.snippet(60));
+        let reply = gtk::MenuItem::with_label("Reply");
+        reply.connect_activate(move |_| this.set_reply(Some((id.clone(), preview.clone()))));
+        menu.append(&reply);
         if mine {
             let (this, id, body) = (self.clone(), m.id.clone(), m.body.clone());
             let edit = gtk::MenuItem::with_label("Edit message…");

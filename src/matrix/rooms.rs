@@ -13,11 +13,11 @@ use matrix_sdk::ruma::events::InitialStateEvent;
 use matrix_sdk::ruma::events::presence::PresenceEvent;
 use matrix_sdk::ruma::events::reaction::ReactionEventContent;
 use matrix_sdk::ruma::events::receipt::ReceiptThread;
-use matrix_sdk::ruma::events::relation::Annotation;
+use matrix_sdk::ruma::events::relation::{Annotation, Reply};
 use matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent;
 use matrix_sdk::ruma::events::room::member::MembershipState;
 use matrix_sdk::ruma::events::room::message::{
-    ReplacementMetadata, RoomMessageEventContent, RoomMessageEventContentWithoutRelation,
+    Relation, ReplacementMetadata, RoomMessageEventContent, RoomMessageEventContentWithoutRelation,
 };
 use matrix_sdk::ruma::events::typing::SyncTypingEvent;
 use matrix_sdk::ruma::serde::Raw;
@@ -236,9 +236,15 @@ pub async fn send_text(
     room: &Room,
     body: &str,
     txn_id: OwnedTransactionId,
+    reply_to: Option<&str>,
 ) -> Result<String, RoomError> {
+    let mut content = RoomMessageEventContent::text_plain(body);
+    if let Some(id) = reply_to {
+        let id = matrix_sdk::ruma::OwnedEventId::try_from(id).map_err(mx)?;
+        content.relates_to = Some(Relation::Reply(Reply::with_event_id(id)));
+    }
     let r = room
-        .send(RoomMessageEventContent::text_plain(body))
+        .send(content)
         .with_transaction_id(txn_id)
         .await
         .map_err(mx)?;
@@ -292,7 +298,7 @@ pub async fn set_typing(room: &Room, typing: bool) {
 pub enum LiveEvent {
     Timeline {
         room_id: String,
-        event: Parsed,
+        event: Box<Parsed>,
     },
     Typing {
         room_id: String,
@@ -315,7 +321,7 @@ pub fn forward_live_events(client: &Client, tx: async_channel::Sender<LiveEvent>
                 let _ = t
                     .send(LiveEvent::Timeline {
                         room_id: room.room_id().to_string(),
-                        event,
+                        event: Box::new(event),
                     })
                     .await;
             }

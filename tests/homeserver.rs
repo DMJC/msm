@@ -247,8 +247,10 @@ async fn retry_is_idempotent_history_and_redaction() {
 
     let body = format!("retry-test {}", std::process::id());
     let txn = matrix_sdk::ruma::TransactionId::new();
-    let e1 = rooms::send_text(&room, &body, txn.clone()).await.unwrap();
-    let e2 = rooms::send_text(&room, &body, txn).await.unwrap(); // simulated retry
+    let e1 = rooms::send_text(&room, &body, txn.clone(), None)
+        .await
+        .unwrap();
+    let e2 = rooms::send_text(&room, &body, txn, None).await.unwrap(); // simulated retry
     assert_eq!(e1, e2, "same txn id must not create a second event");
 
     let hist = rooms::load_history(&room, None, 20).await.unwrap();
@@ -294,17 +296,15 @@ async fn live_feed_delivers_decrypted_messages_and_typing() {
         r.join().await.unwrap();
     }
     let body = format!("live {}", std::process::id());
-    rooms::send_text(&room, &body, matrix_sdk::ruma::TransactionId::new())
+    rooms::send_text(&room, &body, matrix_sdk::ruma::TransactionId::new(), None)
         .await
         .unwrap();
     let mut seen = false;
     for _ in 0..10 {
         sync_a_bit(&dark).await;
         while let Ok(ev) = rx.try_recv() {
-            if let rooms::LiveEvent::Timeline {
-                event: Parsed::Message(m),
-                ..
-            } = ev
+            if let rooms::LiveEvent::Timeline { event, .. } = ev
+                && let Parsed::Message(m) = *event
                 && m.body == body
                 && !m.undecryptable
             {
@@ -425,7 +425,7 @@ async fn group_room_invite_accept_reject_message_and_members() {
 
     // Messages flow and are readable from history.
     let body = format!("group hello {}", std::process::id());
-    rooms::send_text(&room, &body, matrix_sdk::ruma::TransactionId::new())
+    rooms::send_text(&room, &body, matrix_sdk::ruma::TransactionId::new(), None)
         .await
         .unwrap();
     sync_a_bit(&bob).await;
@@ -545,7 +545,7 @@ async fn recovery_key_lets_a_new_device_read_old_encrypted_history() {
         .unwrap();
     sync_a_bit(&a).await;
     let body = format!("old secret {name}");
-    rooms::send_text(&room, &body, matrix_sdk::ruma::TransactionId::new())
+    rooms::send_text(&room, &body, matrix_sdk::ruma::TransactionId::new(), None)
         .await
         .unwrap();
     sync_a_bit(&a).await;
@@ -651,6 +651,7 @@ async fn edits_and_reactions_between_two_users() {
         &room,
         "teh original",
         matrix_sdk::ruma::TransactionId::new(),
+        None,
     )
     .await
     .unwrap();
@@ -689,6 +690,23 @@ async fn edits_and_reactions_between_two_users() {
     let conv = history_of(&room).await;
     let rs = conv.reactions_for(&id);
     assert_eq!(rs[0].senders, ["@alice:localhost"]);
+
+    // Replies: the relation survives the encrypted round trip, and search finds by text.
+    let reply_id = rooms::send_text(
+        &broom,
+        "agreed, thanks",
+        matrix_sdk::ruma::TransactionId::new(),
+        Some(&id),
+    )
+    .await
+    .unwrap();
+    // Alice needs Bob's room key (to-device) before she can read his message.
+    sync_a_bit(&alice).await;
+    let conv = history_of(&room).await;
+    let reply = conv.find(&reply_id).expect("reply visible to alice");
+    assert_eq!(reply.reply_to.as_deref(), Some(id.as_str()));
+    assert!(reply.matches("THANKS"));
+    assert!(conv.find(&id).unwrap().reply_to.is_none());
 }
 
 #[tokio::test]

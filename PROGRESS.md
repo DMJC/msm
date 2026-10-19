@@ -128,17 +128,26 @@ UI is still a placeholder window.
     own picture chosen via the file dialog and confirmed on the server profile, header avatar.
 - Tests: 52 unit + 3 bin + 13 integration pass; clippy/fmt clean.
 
+## Session 11
+- Phase 9: replies and in-conversation search.
+  - Replies: `ChatMessage.reply_to` parsed from `m.in_reply_to`; `send_text(.., reply_to)` sends a standard reply relation (no quoted-text fallback, as in current spec);
+    UI: right-click > Reply, reply bar above the composer with cancel, quote line above replies (name + snippet, "an earlier message" if not loaded), retry keeps the reply target.
+  - Search: Ctrl+F / magnifier button, case/whitespace-insensitive filter over loaded messages with a match count (`ChatMessage::matches`).
+  - `LiveEvent::Timeline` now boxes its event (clippy size lint).
+  - Verified: unit tests, integration test (encrypted reply relation round trip, search match), and the GUI (reply bar, quote persisted across restart, search "1 found").
+- Tests: 54 unit + 3 bin + 13 integration pass; clippy/fmt clean.
+
 ## Known problems / not verified
+- Search covers only messages already loaded (no server-side search); replies to unloaded messages show "an earlier message"; no jump-to-original.
 - Other users' avatar changes are only noticed after restart (user avatars are cached for the session); no initials on placeholders; no avatar zoom/preview.
 - Image previews decode untrusted data with gdk-pixbuf (size-limited, failures ignored); "Open" hands files to the default application, as other clients do.
 - No upload progress / cancel, no drag-and-drop or paste-image, no thumbnails sent with images, no audio/video playback (they appear as files).
 - Attachments verified against Synapse and this client only (no Element).
-- No interactive device verification (SAS), no per-message encryption indicators, no search or replies yet.
+- No interactive device verification (SAS), no per-message encryption indicators.
 - Not implemented: friend requests, kick/ban and room settings, recovery reset/disable.
 - The three-account GUI acceptance scenario has not been run end to end; hide-to-tray via a real close click and the installed .desktop icon are unverified on the user's panel.
 - "Load older messages" can show when nothing older exists. Contact cache assumes a single account.
 
 ## Exact next task
-1. In-conversation search and replies.
-2. Interactive verification (SAS emoji) + per-message encryption indicators.
-3. Friend requests; third-party interop test (Element Web vs local Synapse); three-account acceptance scenario.
+1. Interactive verification (SAS emoji) + per-message encryption indicators.
+2. Friend requests; third-party interop test (Element Web vs local Synapse); three-account acceptance scenario.

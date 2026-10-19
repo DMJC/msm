@@ -650,7 +650,7 @@ impl App {
                     .as_ref()
                     .and_then(|c| c.user_id().map(|u| u.to_string()));
                 // Count/notify only for new, visible messages from others.
-                if let Parsed::Message(m) = &event
+                if let Parsed::Message(m) = &*event
                     && Some(&m.sender) != me.as_ref()
                     && !m.redacted
                 {
@@ -674,7 +674,7 @@ impl App {
                     }
                 }
                 if let Some(w) = window {
-                    w.on_event(event);
+                    w.on_event(*event);
                 }
             }
         }

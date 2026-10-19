@@ -112,6 +112,51 @@ pub struct ChatMessage {
     pub undecryptable: bool,
     pub delivery: Delivery,
     pub attachment: Option<Attachment>,
+    /// Event ID this message replies to (`m.in_reply_to`).
+    pub reply_to: Option<String>,
+}
+
+impl ChatMessage {
+    /// Case-insensitive match on the text (or attachment filename); deleted messages never match.
+    pub fn matches(&self, query: &str) -> bool {
+        let fold = |t: &str| {
+            t.split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase()
+        };
+        let q = fold(query);
+        if self.redacted || q.is_empty() {
+            return false;
+        }
+        fold(&self.body).contains(&q)
+            || self
+                .attachment
+                .as_ref()
+                .is_some_and(|a| a.filename.to_lowercase().contains(&q))
+    }
+
+    /// One-line preview for quoting in a reply.
+    pub fn snippet(&self, max_chars: usize) -> String {
+        let text = if self.redacted {
+            "message deleted".to_owned()
+        } else if self.undecryptable {
+            "encrypted message".to_owned()
+        } else if self.body.is_empty() {
+            self.attachment
+                .as_ref()
+                .map(|a| a.filename.clone())
+                .unwrap_or_default()
+        } else {
+            self.body.clone()
+        };
+        let line: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if line.chars().count() > max_chars {
+            format!("{}…", line.chars().take(max_chars).collect::<String>())
+        } else {
+            line
+        }
+    }
 }
 
 /// A decoded timeline event relevant to the conversation view.
@@ -164,6 +209,10 @@ pub struct Conversation {
 }
 
 impl Conversation {
+    pub fn find(&self, id: &str) -> Option<&ChatMessage> {
+        self.index.get(id).and_then(|&i| self.messages.get(i))
+    }
+
     pub fn messages(&self) -> &[ChatMessage] {
         &self.messages
     }
@@ -216,7 +265,14 @@ impl Conversation {
         self.reindex();
     }
 
-    pub fn add_pending(&mut self, txn_id: &str, sender: &str, body: &str, ts: u64) {
+    pub fn add_pending(
+        &mut self,
+        txn_id: &str,
+        sender: &str,
+        body: &str,
+        ts: u64,
+        reply_to: Option<&str>,
+    ) {
         self.insert(ChatMessage {
             id: txn_id.to_owned(),
             txn_id: Some(txn_id.to_owned()),
@@ -228,6 +284,7 @@ impl Conversation {
             undecryptable: false,
             delivery: Delivery::Pending,
             attachment: None,
+            reply_to: reply_to.map(str::to_owned),
         });
     }
 
@@ -395,6 +452,10 @@ pub fn parse_event(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
                 undecryptable: false,
                 delivery: Delivery::Sent,
                 attachment: attachment_of(&e.content.msgtype),
+                reply_to: match &e.content.relates_to {
+                    Some(Relation::Reply(r)) => Some(r.in_reply_to.event_id.to_string()),
+                    _ => None,
+                },
             }))
         }
         AnySyncMessageLikeEvent::RoomEncrypted(SyncMessageLikeEvent::Redacted(e)) => {
@@ -409,6 +470,7 @@ pub fn parse_event(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
                 undecryptable: false,
                 delivery: Delivery::Sent,
                 attachment: None,
+                reply_to: None,
             }))
         }
         AnySyncMessageLikeEvent::RoomMessage(SyncMessageLikeEvent::Redacted(e)) => {
@@ -423,6 +485,7 @@ pub fn parse_event(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
                 undecryptable: false,
                 delivery: Delivery::Sent,
                 attachment: None,
+                reply_to: None,
             }))
         }
         AnySyncMessageLikeEvent::RoomEncrypted(SyncMessageLikeEvent::Original(e)) => {
@@ -437,6 +500,7 @@ pub fn parse_event(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
                 undecryptable: true,
                 delivery: Delivery::Sent,
                 attachment: None,
+                reply_to: None,
             }))
         }
         AnySyncMessageLikeEvent::Reaction(SyncMessageLikeEvent::Original(e)) => {
@@ -483,6 +547,7 @@ fn parse_redacted_fallback(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
         undecryptable: false,
         delivery: Delivery::Sent,
         attachment: None,
+        reply_to: None,
     }))
 }
 
@@ -507,6 +572,7 @@ mod tests {
             undecryptable: false,
             delivery: Delivery::Sent,
             attachment: None,
+            reply_to: None,
         }
     }
 
@@ -539,7 +605,7 @@ mod tests {
     #[test]
     fn local_echo_lifecycle_no_duplicates() {
         let mut c = Conversation::default();
-        c.add_pending("t1", "@me:x", "hi", 5);
+        c.add_pending("t1", "@me:x", "hi", 5, None);
         assert_eq!(c.messages()[0].delivery, Delivery::Pending);
         // Remote echo arrives before the send call returns.
         let mut remote = msg("$e", 6, "hi");
@@ -555,7 +621,7 @@ mod tests {
     #[test]
     fn send_return_before_echo() {
         let mut c = Conversation::default();
-        c.add_pending("t1", "@me:x", "hi", 5);
+        c.add_pending("t1", "@me:x", "hi", 5, None);
         c.mark_sent("t1", "$e");
         assert_eq!(c.messages()[0].id, "$e");
         let mut remote = msg("$e", 6, "hi");
@@ -567,13 +633,43 @@ mod tests {
     #[test]
     fn failed_send_can_be_retried_without_duplicate() {
         let mut c = Conversation::default();
-        c.add_pending("t1", "@me:x", "hi", 5);
+        c.add_pending("t1", "@me:x", "hi", 5, None);
         c.mark_failed("t1", "offline");
         assert_eq!(c.messages()[0].delivery, Delivery::Failed("offline".into()));
         c.mark_pending("t1");
         c.mark_sent("t1", "$e");
         assert_eq!(c.messages().len(), 1);
         assert_eq!(c.messages()[0].delivery, Delivery::Sent);
+    }
+
+    #[test]
+    fn search_matching_and_snippets() {
+        let mut m = msg("$1", 1, "Hello  World\nsecond line that is rather long");
+        assert!(m.matches("hello wor"));
+        assert!(m.matches("  LINE "));
+        assert!(!m.matches("absent"));
+        assert!(!m.matches("   "));
+        assert_eq!(m.snippet(11), "Hello World…");
+        m.redacted = true;
+        assert!(!m.matches("hello"));
+        assert_eq!(m.snippet(40), "message deleted");
+    }
+
+    #[test]
+    fn parses_replies_and_pending_replies_keep_their_target() {
+        let m = parse_event(&raw(json!({
+            "type":"m.room.message","event_id":"$9","sender":"@a:x","origin_server_ts":50,
+            "content":{"msgtype":"m.text","body":"yes",
+                       "m.relates_to":{"m.in_reply_to":{"event_id":"$1"}}}
+        })));
+        match m {
+            Some(Parsed::Message(m)) => assert_eq!(m.reply_to.as_deref(), Some("$1")),
+            other => panic!("{other:?}"),
+        }
+        let mut c = Conversation::default();
+        c.add_pending("t1", "@me:x", "re", 5, Some("$1"));
+        assert_eq!(c.find("t1").unwrap().reply_to.as_deref(), Some("$1"));
+        assert!(c.find("nope").is_none());
     }
 
     #[test]
