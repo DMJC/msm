@@ -1073,3 +1073,113 @@ async fn friend_request_accept_and_remove_between_two_users() {
     // The contact itself survives: friendship is separate from having a contact.
     assert!(bm.get(&aid).is_some());
 }
+
+#[tokio::test]
+async fn three_accounts_in_a_group_keep_independent_nicknames() {
+    use matrix_sdk::ruma::api::client::profile::DisplayName;
+    let Some(hs) = homeserver() else { return };
+    let (alice, _, _) = register_fresh(&hs).await;
+    let (bob, _, _) = register_fresh(&hs).await;
+    let (carol, _, _) = register_fresh(&hs).await;
+    let id = |c: &Client| c.user_id().unwrap().to_string();
+    let (a, b, c) = (id(&alice), id(&bob), id(&carol));
+    for (cl, n) in [(&alice, "Alice A"), (&bob, "Bob B"), (&carol, "Carol C")] {
+        cl.account().set_display_name(Some(n)).await.unwrap();
+    }
+
+    let room = rooms::create_group(&alice, "Trio", &[b.clone(), c.clone()])
+        .await
+        .unwrap();
+    for cl in [&bob, &carol] {
+        for _ in 0..10 {
+            sync_a_bit(cl).await;
+            if let Some(i) = rooms::pending_invites(cl).await.into_iter().next() {
+                rooms::accept_invite(cl, &i.room_id).await.unwrap();
+                break;
+            }
+        }
+    }
+    for (cl, who) in [(&alice, "alice"), (&bob, "bob"), (&carol, "carol")] {
+        sync_a_bit(cl).await;
+        let r = cl.get_room(room.room_id()).expect("joined");
+        rooms::send_text(
+            &r,
+            &format!("hi from {who}"),
+            matrix_sdk::ruma::TransactionId::new(),
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    for cl in [&alice, &bob, &carol] {
+        sync_a_bit(cl).await;
+    }
+
+    // Each viewer names the other two differently, and also renames one of them
+    // so the three views disagree about every person.
+    let nick = |viewer: &Client, others: [(&str, &str); 2]| {
+        let mut m = ContactManager::default();
+        for (mx, n) in others {
+            m.add(mx, 1).unwrap();
+            m.set_nickname(mx, Some(n), 2).unwrap();
+        }
+        let v = viewer.clone();
+        let doc = m.document().clone();
+        async move {
+            let merged = contacts_sync::sync(&v.account(), &doc).await.unwrap();
+            ContactManager::new(merged)
+        }
+    };
+    let ma = nick(&alice, [(&b, "Alice's Bob"), (&c, "Alice's Carol")]).await;
+    let mb = nick(&bob, [(&a, "Bob's Alice"), (&c, "Bob's Carol")]).await;
+    let mc = nick(&carol, [(&a, "Carol's Alice"), (&b, "Carol's Bob")]).await;
+
+    // Every viewer reads the same Matrix history but resolves names privately.
+    for (viewer, mgr, expect) in [
+        (&alice, &ma, [(&b, "Alice's Bob"), (&c, "Alice's Carol")]),
+        (&bob, &mb, [(&a, "Bob's Alice"), (&c, "Bob's Carol")]),
+        (&carol, &mc, [(&a, "Carol's Alice"), (&b, "Carol's Bob")]),
+    ] {
+        let r = viewer.get_room(room.room_id()).unwrap();
+        let conv = history_of(&r).await;
+        assert_eq!(conv.messages().len(), 3, "everyone sees all three messages");
+        for (mx, want) in expect {
+            assert!(conv.messages().iter().any(|m| &m.sender == mx));
+            assert_eq!(mgr.resolver().resolve(mx, None), want);
+        }
+    }
+
+    // A nickname is stored only in its owner's account data, never in anyone else's...
+    for (viewer, foreign) in [
+        (&alice, ["Bob's", "Carol's"]),
+        (&bob, ["Alice's", "Carol's"]),
+        (&carol, ["Alice's", "Bob's"]),
+    ] {
+        let (doc, _) = contacts_sync::fetch(&viewer.account()).await.unwrap();
+        let blob = serde_json::to_string(&doc.to_value()).unwrap();
+        for f in foreign {
+            assert!(!blob.contains(&format!("{f} ")), "{blob}");
+        }
+    }
+    // ...and the public profiles and room member names are untouched.
+    for (mx, want) in [(&a, "Alice A"), (&b, "Bob B"), (&c, "Carol C")] {
+        let p = carol
+            .account()
+            .fetch_user_profile_of(<&UserId>::try_from(mx.as_str()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            p.get_static::<DisplayName>().unwrap().as_deref(),
+            Some(want)
+        );
+    }
+    let names = rooms::member_names(&room).await.unwrap();
+    for (mx, want) in [(&a, "Alice A"), (&b, "Bob B"), (&c, "Carol C")] {
+        assert!(
+            names
+                .iter()
+                .any(|(i, n)| i == mx && n.as_deref() == Some(want)),
+            "{names:?}"
+        );
+    }
+}

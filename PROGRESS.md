@@ -165,7 +165,8 @@ UI is still a placeholder window.
   - Declining a request from someone who is only a contact because of the request drops the contact; an existing customised contact is kept.
   - Verified: 4 manager unit tests + parse test, integration test (request, accept, remove across two real accounts; no room/invite created), GUI (bob's request showed in the section, Accept turned it into 👥 and bob received the accept).
   - Limits: to-device messages reach only the recipient's devices that exist at send time (a device added later doesn't see an old request; "Resend friend request" covers it); the sender's side cannot tell a request was never delivered (no read ack).
-- Tests: 59 unit + 3 bin + 16 integration pass; clippy/fmt clean.
+- Three-account scenario (automated): `three_accounts_in_a_group_keep_independent_nicknames` registers alice/bob/carol, group room, everyone messages; each resolves the others by their own private nicknames, nicknames are stored only in their owner's account data, and public profiles/room member names are unchanged. Not run through the GUI with three live windows.
+- Tests: 59 unit + 3 bin + 17 integration pass; clippy/fmt clean.
 
 ## Known problems / not verified
 - Verification needs both sides to already know each other's keys (e.g. a shared room) and the peer to have accepted the DM. The green ✔ states are not GUI-verified.
@@ -182,4 +183,4 @@ UI is still a placeholder window.
 - "Load older messages" can show when nothing older exists. Contact cache assumes a single account.
 
 ## Exact next task
-1. Third-party interop test (Element Web vs local Synapse); three-account acceptance scenario.
+1. Third-party interop test (Element Web vs local Synapse); optional three-account GUI run.
