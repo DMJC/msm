@@ -33,7 +33,15 @@ pub fn open(app: &Rc<App>) {
     let devices = gtk::Label::new(None);
     devices.set_xalign(0.0);
     devices.set_line_wrap(true);
-    area.pack_start(&devices, false, false, 6);
+    // Accounts can have dozens of devices; keep the dialog (and its buttons) on screen.
+    let devices_scroll =
+        gtk::ScrolledWindow::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
+    devices_scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    devices_scroll.set_min_content_height(120);
+    devices_scroll.set_max_content_height(200);
+    devices_scroll.set_propagate_natural_height(true);
+    devices_scroll.add(&devices);
+    area.pack_start(&devices_scroll, true, true, 6);
 
     let note = gtk::Label::new(Some(
         "A recovery key lets a new device read your older encrypted messages. \
