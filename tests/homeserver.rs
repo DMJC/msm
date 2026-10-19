@@ -150,6 +150,8 @@ async fn dm_round_trip() {
 #[tokio::test]
 async fn session_persists_restores_and_logout_wipes() {
     let Some(hs) = homeserver() else { return };
+    // Never touch the real app's saved session.
+    msm::matrix::secrets::set_namespace("com.matrixmessenger.Msm.test");
     if msm::matrix::secrets::save("probe", "x").await.is_err() {
         eprintln!("SKIP: no secure credential store available");
         return;
@@ -212,10 +214,9 @@ async fn dm_discovery_reuses_existing_room_and_peer_sees_it_as_dm() {
         .unwrap();
     assert_eq!(second.room_id(), again.room_id());
     assert!(
-        rooms::existing_dms(&alice, "@darkmage:localhost")
+        !rooms::existing_dms(&alice, "@darkmage:localhost")
             .unwrap()
-            .len()
-            >= 1
+            .is_empty()
     );
     let _ = first;
 
@@ -315,4 +316,54 @@ async fn live_feed_delivers_decrypted_messages_and_typing() {
         }
     }
     assert!(seen, "decrypted live message not received");
+}
+
+/// The sync loop must carry our chosen presence, otherwise /sync flips us back to online.
+#[tokio::test]
+async fn sync_loop_keeps_chosen_presence() {
+    use matrix_sdk::ruma::api::client::presence::get_presence;
+    use matrix_sdk::ruma::presence::PresenceState;
+    let Some(hs) = homeserver() else { return };
+    let c = login_as(&hs, "frank", "pres-frank").await;
+    let me = c.user_id().unwrap().to_owned();
+    let (tx, _rx) = async_channel::unbounded();
+    use msm::matrix::presence::{Desired, UiStatus};
+    let (ptx, prx) = tokio::sync::watch::channel(Desired::new(UiStatus::Online, ""));
+    let task = tokio::spawn(msm::matrix::synchronization::run(c.clone(), tx, prx));
+
+    async fn seen(c: &Client, me: &matrix_sdk::ruma::OwnedUserId, want: PresenceState) -> bool {
+        // Synapse can take well over 10s to apply a presence change.
+        for _ in 0..90 {
+            if let Ok(r) = c.send(get_presence::v3::Request::new(me.clone())).await
+                && r.presence == want
+            {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        false
+    }
+
+    assert!(seen(&c, &me, PresenceState::Online).await, "online");
+    let set = |st: UiStatus| {
+        let ptx = ptx.clone();
+        async move {
+            ptx.send_replace(Desired::new(st, ""));
+        }
+    };
+    set(UiStatus::Offline).await;
+    assert!(
+        seen(&c, &me, PresenceState::Offline).await,
+        "offline must stick across syncs"
+    );
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(
+        seen(&c, &me, PresenceState::Offline).await,
+        "offline must not flip back"
+    );
+    set(UiStatus::Busy).await;
+    assert!(seen(&c, &me, PresenceState::Unavailable).await, "away/busy");
+    set(UiStatus::Online).await;
+    assert!(seen(&c, &me, PresenceState::Online).await, "back online");
+    task.abort();
 }

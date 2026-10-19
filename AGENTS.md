@@ -21,3 +21,18 @@ serde, thiserror, tracing. A clean build with all of these succeeds (first build
 
 ## Rules
 GTK3 only; GTK calls on main thread only; Matrix/DB work off the UI thread; never log secrets; nicknames never touch Matrix profile/room state.
+
+## Wayland, tray and desktop integration
+- GTK3 runs natively on Wayland (`GdkWaylandDisplay` is logged at startup); no X11-only APIs are used.
+- Tray icon: `src/tray.rs`, StatusNotifierItem over D-Bus (ksni), NOT `gtk::StatusIcon` (X11-only). Works with panels that run a
+  StatusNotifierWatcher (MATE panel, KDE, XFCE, GNOME + AppIndicator extension). With no watcher, the tray is absent and closing the window quits.
+  The tray menu sets status; left click toggles the window; closing the window hides it to the tray.
+- Icons are drawn in code (`src/icon.rs`), so no icon theme is needed. `data/*.desktop` + SVG + `scripts/install-local.sh` give Wayland
+  panels the app_id -> icon mapping (the application id is `com.matrixmessenger.Msm`).
+- Own status flows: UI/tray -> `App::set_my_presence` -> watch channel -> sync loop (`matrix::synchronization::run`), which publishes it.
+
+## Testing hazards
+- Integration tests must never use the real secret-store namespace: call `matrix::secrets::set_namespace(..)` first (the keyring test does).
+- Manual GUI testing without touching the real desktop: run Xephyr (`Xephyr :5`), then `DISPLAY=:5 GDK_BACKEND=x11` for the app and xdotool.
+  Never send xdotool input / screenshots to the real display; the tray can be driven over D-Bus
+  (`busctl --user call org.kde.StatusNotifierItem-<pid>-1 /MenuBar com.canonical.dbusmenu Event isvu <id> clicked i 0 0`).

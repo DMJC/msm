@@ -4,11 +4,20 @@
 use std::time::Duration;
 
 use matrix_sdk::Client;
+use std::sync::Arc;
+
 use matrix_sdk::config::SyncSettings;
+use tokio::sync::watch;
+
+use super::presence::{self, Desired};
 
 #[derive(Debug, Clone)]
 pub enum SyncEvent {
     Connected,
+    /// A sync response was processed (room state / unread counts may have changed).
+    Synced,
+    /// Publishing our status failed (servers may disable or restrict presence).
+    PresenceFailed(String),
     /// Transient failure; the loop keeps retrying with backoff.
     Disconnected(String),
     /// Server rejected our token; the user must log in again.
@@ -21,12 +30,43 @@ pub fn backoff(attempt: u32) -> Duration {
 }
 
 /// Runs until the task is aborted. Never spins: every failure waits.
-pub async fn run(client: Client, tx: async_channel::Sender<SyncEvent>) {
+///
+/// Also owns publishing our status. `/sync` marks us online unless told
+/// otherwise, so every request carries the wanted wire presence. When the wanted
+/// status changes, the in-flight long-poll is dropped, one quick (zero-timeout)
+/// sync runs with the new presence, and only then is the status PUT (in a
+/// background task, since some servers take seconds to answer). Publishing
+/// earlier races with the server finishing the abandoned request, which could
+/// flip us back to online.
+pub async fn run(
+    client: Client,
+    tx: async_channel::Sender<SyncEvent>,
+    mut desired: watch::Receiver<Desired>,
+) {
     let mut attempt = 0u32;
     let mut first = true;
+    let mut published: Option<Desired> = None;
+    // Presence PUTs can be slow on some servers; they run off the sync loop, one at a time, in order.
+    let publish_lock = Arc::new(tokio::sync::Mutex::new(()));
     let mut settings = SyncSettings::default().timeout(Duration::from_secs(30));
     loop {
-        match client.sync_once(settings.clone()).await {
+        let want = desired.borrow_and_update().clone();
+        let needs_publish = published.as_ref() != Some(&want);
+        let mut request = settings.clone().set_presence(want.wire());
+        if needs_publish {
+            request = request.timeout(Duration::ZERO);
+        }
+        let changed = async {
+            if desired.changed().await.is_err() {
+                // Sender gone: keep syncing with the last status, don't spin.
+                std::future::pending::<()>().await;
+            }
+        };
+        let result = tokio::select! {
+            r = client.sync_once(request) => r,
+            _ = changed => continue,
+        };
+        match result {
             Ok(resp) => {
                 if attempt > 0 || first {
                     let _ = tx.send(SyncEvent::Connected).await;
@@ -34,6 +74,26 @@ pub async fn run(client: Client, tx: async_channel::Sender<SyncEvent>) {
                 attempt = 0;
                 first = false;
                 settings = settings.token(resp.next_batch);
+                if needs_publish {
+                    // Recorded even on failure so a server without presence is not retried every sync.
+                    published = Some(want.clone());
+                    let (client, tx, lock, latest) = (
+                        client.clone(),
+                        tx.clone(),
+                        publish_lock.clone(),
+                        desired.clone(),
+                    );
+                    tokio::spawn(async move {
+                        let _turn = lock.lock().await;
+                        if *latest.borrow() != want {
+                            return; // superseded; a newer status is queued behind us
+                        }
+                        if let Err(e) = presence::publish(&client, &want).await {
+                            let _ = tx.send(SyncEvent::PresenceFailed(e)).await;
+                        }
+                    });
+                }
+                let _ = tx.send(SyncEvent::Synced).await;
             }
             Err(e) => {
                 if e.client_api_error_kind().is_some_and(|k| {

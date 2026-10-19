@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Matrix Messenger
+Comment=MSN-style instant messenger for Matrix
+Exec=msm
+Icon=com.matrixmessenger.Msm
+Terminal=false
+Categories=Network;InstantMessaging;Chat;GTK;
+StartupNotify=true
+StartupWMClass=com.matrixmessenger.Msm

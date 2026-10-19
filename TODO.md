@@ -16,10 +16,19 @@
 - [x] Contact list UI, nickname editing UI using resolver (launch-verified; interactions not exercised)
 - [ ] Ignored-user block/unblock
 ## Phase 5+
-- [ ] DM discovery (m.direct), messaging, conversation UI, typing
+- [x] DM discovery (m.direct), messaging, conversation UI, typing (verified vs Synapse and in the GUI; not vs Element)
 - [ ] Group rooms/invites
-- [ ] Presence, friend requests
+- [x] Own status + tray + presence publishing (verified vs Synapse and on Wayland/MATE panel)
+- [ ] Automatic Away timer
+- [ ] Contact presence display verified with two users sharing a room
+- [ ] Friend requests
 - [ ] E2EE + verification
-- [ ] Media, reactions, edits, redactions, search, receipts
+- [x] Redaction (delete own message), read receipts, unread counts
+- [ ] Media, reactions, sending edits, search
 - [ ] Integration tests vs local Synapse (partial: login, nickname sync, DM) + Element; full acceptance scenario
 - [ ] Packaging, user docs
+
+## Platform
+- [x] Native Wayland (GTK3), StatusNotifierItem tray with status menu
+- [ ] Verify taskbar icon via installed .desktop on the user's panel
+- [ ] Hide-to-tray on window close verified by a real click

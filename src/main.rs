@@ -1,4 +1,5 @@
 mod app;
+mod tray;
 mod ui;
 
 use gtk::prelude::*;
@@ -25,6 +26,10 @@ fn activate(gtk_app: &gtk::Application) {
         w.present();
         return;
     }
+    if let Some(d) = gtk::gdk::Display::default() {
+        use gtk::glib::prelude::ObjectExt;
+        tracing::info!("GDK backend: {}", d.type_().name());
+    }
     let dir = authentication::data_dir();
     let _ = std::fs::create_dir_all(&dir);
     let db = match Database::open(&dir.join("app.db")) {
@@ -45,9 +50,19 @@ fn activate(gtk_app: &gtk::Application) {
     window.add(&stack);
 
     let state = app::App::new(window.clone(), stack.clone(), db);
+    state.start_tray();
+    let s = state.clone();
+    window.connect_delete_event(move |_, _| {
+        if s.hide_to_tray() {
+            gtk::glib::Propagation::Stop
+        } else {
+            gtk::glib::Propagation::Proceed
+        }
+    });
     stack.add_named(&ui::login_window::build(&state), "login");
     stack.add_named(&ui::main_window::build(&state), "main");
     window.show_all();
+    state.update_tray();
     stack.set_visible_child_name("login");
 
     // Try to resume a saved session before asking for credentials.

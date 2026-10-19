@@ -8,7 +8,23 @@
 use oo7::{Keyring, Secret};
 use thiserror::Error;
 
-const APP_ID: &str = "com.matrixmessenger.Msm";
+const DEFAULT_APP_ID: &str = "com.matrixmessenger.Msm";
+
+static NAMESPACE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Use a different secret-store namespace for this process. Tests must call this
+/// before touching sessions so they can never read, overwrite or delete a real
+/// user's saved login. Has no effect once secrets have been accessed.
+pub fn set_namespace(ns: &str) {
+    let _ = NAMESPACE.set(ns.to_owned());
+}
+
+fn app_id() -> &'static str {
+    NAMESPACE
+        .get()
+        .map(String::as_str)
+        .unwrap_or(DEFAULT_APP_ID)
+}
 
 #[derive(Debug, Error)]
 pub enum SecretError {
@@ -24,7 +40,7 @@ pub async fn save(kind: &str, text: &str) -> Result<(), SecretError> {
     let ring = Keyring::new().await.map_err(err)?;
     ring.create_item(
         "Matrix Messenger session",
-        &[("application", APP_ID), ("kind", kind)],
+        &[("application", app_id()), ("kind", kind)],
         Secret::text(text),
         true,
     )
@@ -35,7 +51,7 @@ pub async fn save(kind: &str, text: &str) -> Result<(), SecretError> {
 pub async fn load(kind: &str) -> Result<Option<String>, SecretError> {
     let ring = Keyring::new().await.map_err(err)?;
     let items = ring
-        .search_items(&[("application", APP_ID), ("kind", kind)])
+        .search_items(&[("application", app_id()), ("kind", kind)])
         .await
         .map_err(err)?;
     match items.first() {
@@ -49,7 +65,7 @@ pub async fn load(kind: &str) -> Result<Option<String>, SecretError> {
 
 pub async fn delete(kind: &str) -> Result<(), SecretError> {
     let ring = Keyring::new().await.map_err(err)?;
-    ring.delete(&[("application", APP_ID), ("kind", kind)])
+    ring.delete(&[("application", app_id()), ("kind", kind)])
         .await
         .map_err(err)
 }

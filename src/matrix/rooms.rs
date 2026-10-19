@@ -3,7 +3,11 @@
 
 use matrix_sdk::deserialized_responses::TimelineEvent;
 use matrix_sdk::room::MessagesOptions;
+use matrix_sdk::ruma::api::client::receipt::create_receipt::v3::ReceiptType;
 use matrix_sdk::ruma::events::AnySyncTimelineEvent;
+use matrix_sdk::ruma::events::presence::PresenceEvent;
+use matrix_sdk::ruma::events::receipt::ReceiptThread;
+use matrix_sdk::ruma::events::room::member::MembershipState;
 use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
 use matrix_sdk::ruma::events::typing::SyncTypingEvent;
 use matrix_sdk::ruma::serde::Raw;
@@ -12,6 +16,7 @@ use matrix_sdk::{Client, Room};
 use thiserror::Error;
 
 use super::messages::{Parsed, parse_event};
+use super::presence::{ContactPresence, from_wire};
 
 #[derive(Debug, Error)]
 pub enum RoomError {
@@ -32,12 +37,46 @@ pub fn existing_dms(client: &Client, mxid: &str) -> Result<Vec<Room>, RoomError>
 }
 
 /// Open the existing DM with `mxid`, or create one (encrypted by default) if none exists.
+/// With several candidate DMs, prefer one where the peer is joined, then invited.
 pub async fn open_or_create_dm(client: &Client, mxid: &str) -> Result<Room, RoomError> {
     let uid = <&UserId>::try_from(mxid).map_err(|_| RoomError::InvalidUser(mxid.to_owned()))?;
-    if let Some(room) = client.get_dm_room(uid) {
-        return Ok(room);
+    let mut best: Option<(u8, Room)> = None;
+    for room in client.get_dm_rooms(uid) {
+        let rank = match room.get_member(uid).await {
+            Ok(Some(m)) => match m.membership() {
+                MembershipState::Join => 2,
+                MembershipState::Invite => 1,
+                _ => 0,
+            },
+            _ => 0,
+        };
+        if best.as_ref().is_none_or(|(r, _)| rank > *r) {
+            best = Some((rank, room));
+        }
     }
-    client.create_dm(uid).await.map_err(mx)
+    match best {
+        Some((_, room)) => Ok(room),
+        None => client.create_dm(uid).await.map_err(mx),
+    }
+}
+
+/// Unread messages in `room` as computed by the SDK (works for encrypted rooms).
+pub fn unread_count(room: &Room) -> u64 {
+    room.num_unread_messages()
+        .max(room.unread_notification_counts().notification_count)
+}
+
+/// Send a read receipt for `event_id` (best effort).
+pub async fn mark_read(room: &Room, event_id: &str) {
+    let Ok(id) = <&matrix_sdk::ruma::EventId>::try_from(event_id) else {
+        return;
+    };
+    if let Err(e) = room
+        .send_single_receipt(ReceiptType::Read, ReceiptThread::Unthreaded, id.to_owned())
+        .await
+    {
+        tracing::debug!("read receipt failed: {e}");
+    }
 }
 
 pub struct History {
@@ -98,8 +137,19 @@ pub async fn set_typing(room: &Room, typing: bool) {
 
 #[derive(Debug, Clone)]
 pub enum LiveEvent {
-    Timeline { room_id: String, event: Parsed },
-    Typing { room_id: String, users: Vec<String> },
+    Timeline {
+        room_id: String,
+        event: Parsed,
+    },
+    Typing {
+        room_id: String,
+        users: Vec<String>,
+    },
+    Presence {
+        user: String,
+        state: ContactPresence,
+        message: Option<String>,
+    },
 }
 
 /// Register handlers that forward live room events to `tx`.
@@ -118,14 +168,29 @@ pub fn forward_live_events(client: &Client, tx: async_channel::Sender<LiveEvent>
             }
         }
     });
+    let ttx = tx.clone();
     client.add_event_handler(move |ev: SyncTypingEvent, room: Room| {
-        let tx = tx.clone();
+        let tx = ttx.clone();
         async move {
             let users = ev.content.user_ids.iter().map(|u| u.to_string()).collect();
             let _ = tx
                 .send(LiveEvent::Typing {
                     room_id: room.room_id().to_string(),
                     users,
+                })
+                .await;
+        }
+    });
+    client.add_event_handler(move |ev: PresenceEvent| {
+        let tx = tx.clone();
+        async move {
+            let (state, message) =
+                from_wire(&ev.content.presence, ev.content.status_msg.as_deref());
+            let _ = tx
+                .send(LiveEvent::Presence {
+                    user: ev.sender.to_string(),
+                    state,
+                    message,
                 })
                 .await;
         }

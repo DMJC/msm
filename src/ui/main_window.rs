@@ -2,6 +2,8 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 use msm::contacts::contact::Contact;
+use msm::icon::status_rgb;
+use msm::matrix::presence::{ContactPresence, UiStatus};
 
 use crate::app::{App, now_ms};
 
@@ -11,6 +13,9 @@ pub struct MainUi {
     status: gtk::Label,
     search: gtk::SearchEntry,
     list: gtk::Box,
+    combo: gtk::ComboBoxText,
+    msg_entry: gtk::Entry,
+    updating: std::cell::Cell<bool>,
 }
 
 impl MainUi {
@@ -34,6 +39,7 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     let mxid = gtk::Label::new(None);
     mxid.set_xalign(0.0);
     mxid.set_selectable(true);
+    mxid.set_can_focus(false);
     mxid.style_context().add_class("dim-label");
     let status = gtk::Label::new(Some("Connecting…"));
     status.set_xalign(0.0);
@@ -41,6 +47,36 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     for w in [&name, &mxid, &status] {
         root.pack_start(w, false, false, 0);
     }
+
+    let combo = gtk::ComboBoxText::new();
+    for st in UiStatus::ALL {
+        combo.append(Some(st.key()), st.label());
+    }
+    combo.set_active_id(Some(app.presence.get().key()));
+    let msg_entry = gtk::Entry::new();
+    msg_entry.set_placeholder_text(Some("Set a status message"));
+    msg_entry.set_text(&app.presence_msg.borrow());
+    root.pack_start(&combo, false, false, 0);
+    root.pack_start(&msg_entry, false, false, 0);
+
+    let a = app.clone();
+    combo.connect_changed(move |c| {
+        let updating = a
+            .main_ui
+            .borrow()
+            .as_ref()
+            .is_some_and(|m| m.updating.get());
+        if updating {
+            return;
+        }
+        if let Some(st) = c.active_id().and_then(|id| UiStatus::from_key(&id)) {
+            a.set_my_presence(st, None);
+        }
+    });
+    let a = app.clone();
+    msg_entry.connect_activate(move |e| {
+        a.set_my_presence(a.presence.get(), Some(e.text().to_string()));
+    });
 
     let search = gtk::SearchEntry::new();
     search.set_placeholder_text(Some("Search contacts"));
@@ -98,8 +134,41 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         status,
         search,
         list,
+        combo,
+        msg_entry,
+        updating: std::cell::Cell::new(false),
     });
     root.upcast()
+}
+
+/// Reflect `app.presence` in the selector without re-triggering its handlers.
+pub fn sync_presence_controls(app: &Rc<App>) {
+    if let Some(m) = app.main_ui.borrow().as_ref() {
+        m.updating.set(true);
+        m.combo.set_active_id(Some(app.presence.get().key()));
+        if m.msg_entry.text().as_str() != app.presence_msg.borrow().as_str() {
+            m.msg_entry.set_text(&app.presence_msg.borrow());
+        }
+        m.updating.set(false);
+    }
+}
+
+fn presence_dot(p: ContactPresence) -> String {
+    let status = match p {
+        ContactPresence::Online => Some(UiStatus::Online),
+        ContactPresence::Away => Some(UiStatus::Away),
+        ContactPresence::Busy => Some(UiStatus::Busy),
+        ContactPresence::Offline => Some(UiStatus::Offline),
+        ContactPresence::Unknown => None,
+    };
+    match status {
+        Some(s) => {
+            let (r, g, b) = status_rgb(s);
+            format!("<span foreground='#{r:02x}{g:02x}{b:02x}'>●</span> ")
+        }
+        // Presence unavailable is not the same as offline: hollow marker.
+        None => "<span foreground='#aaaaaa'>○</span> ".to_owned(),
+    }
 }
 
 pub fn show(app: &Rc<App>, me: &str) {
@@ -167,14 +236,31 @@ fn contact_row(app: &Rc<App>, c: &Contact) -> gtk::Widget {
         (m.resolver().resolve(&c.mxid, None), c.mxid.clone())
     };
     let row = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let unread = app.unread_for(&c.mxid);
+    let (presence, status_msg) = app
+        .contact_presence
+        .borrow()
+        .get(&c.mxid)
+        .cloned()
+        .unwrap_or((ContactPresence::Unknown, None));
     let l = gtk::Label::new(None);
     l.set_xalign(0.0);
     l.set_markup(&format!(
-        "{}{}",
+        "{}{}{}{}",
+        presence_dot(presence),
         if c.favorite { "★ " } else { "" },
-        gtk::glib::markup_escape_text(&display)
+        gtk::glib::markup_escape_text(&display),
+        if unread > 0 {
+            format!("  <b><span foreground='#d33'>({unread})</span></b>")
+        } else {
+            String::new()
+        }
     ));
-    let sub = gtk::Label::new(Some(&show_id));
+    let sub_text = match status_msg {
+        Some(m) => format!("{show_id} - {m}"),
+        None => show_id,
+    };
+    let sub = gtk::Label::new(Some(&sub_text));
     sub.set_xalign(0.0);
     sub.style_context().add_class("dim-label");
     row.pack_start(&l, false, false, 0);
@@ -188,6 +274,8 @@ fn contact_row(app: &Rc<App>, c: &Contact) -> gtk::Widget {
     ev.connect_button_press_event(move |_, e| {
         if e.button() == 3 {
             contact_menu(&a, &mxid).popup_at_pointer(Some(e));
+        } else if e.button() == 1 && e.event_type() == gtk::gdk::EventType::DoubleButtonPress {
+            a.open_conversation(&mxid);
         }
         gtk::glib::Propagation::Proceed
     });
@@ -210,6 +298,8 @@ fn contact_menu(app: &Rc<App>, mxid: &str) -> gtk::Menu {
         )
     };
 
+    let (a, id) = (app.clone(), mxid.to_owned());
+    menu.append(&item("Send message", move || a.open_conversation(&id)));
     let (a, id) = (app.clone(), mxid.to_owned());
     menu.append(&item("Rename…", move || {
         let current = a

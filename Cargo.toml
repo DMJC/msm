@@ -8,6 +8,7 @@ async-channel = "2.5.0"
 directories = "6.0.0"
 getrandom = "0.4.3"
 gtk = "0.19"
+ksni = "0.3.6"
 matrix-sdk = "0.19"
 oo7 = { version = "0.6.0", default-features = false, features = ["tokio", "native_crypto"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
