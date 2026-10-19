@@ -189,6 +189,7 @@ UI is still a placeholder window.
 - Reply quotes are clickable and scroll to the original (clearing a search that hides it; a hint if it is older than what is loaded). Verified in the GUI with the original scrolled out of view. Placeholder initials only for people, not rooms (checked live: room tiles were all "R" before).
 - Drag-and-drop: dropping local files on a conversation window sends them (`send_file`, shared with the 📎 button). Verified in the GUI with a GTK drag source in Xephyr: the file was uploaded and shown as an attachment. Dropping onto the text input is handled by the text view itself and does not send.
 - Paste image: Ctrl+V with an image on the clipboard sends it as a PNG attachment (temp file deleted afterwards); text paste is unchanged. Verified in the GUI with a clipboard-owning helper: uploaded and previewed.
+- Full suite after Session 17 changes: 59 unit + 4 bin + 20 integration pass against local Synapse (integration takes about 61 s).
 - Verification-request unread count: investigated, it is SDK/server behaviour, left as a known problem.
 
 ## Known problems / not verified
