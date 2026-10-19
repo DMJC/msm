@@ -3,7 +3,7 @@
 
 use thiserror::Error;
 
-use super::contact::{is_valid_mxid, Contact};
+use super::contact::{Contact, is_valid_mxid};
 use super::nickname_resolver::NameResolver;
 use super::synchronization::ContactsDocument;
 
@@ -29,7 +29,10 @@ pub struct ContactManager {
 
 impl ContactManager {
     pub fn new(doc: ContactsDocument) -> Self {
-        let mut m = Self { doc, resolver: NameResolver::new() };
+        let mut m = Self {
+            doc,
+            resolver: NameResolver::new(),
+        };
         m.rebuild_resolver();
         m
     }
@@ -55,7 +58,12 @@ impl ContactManager {
     fn rebuild_resolver(&mut self) {
         let keys: Vec<String> = self.doc.contacts.keys().cloned().collect();
         for k in keys {
-            let nick = self.doc.contacts.get(&k).filter(|c| !c.deleted).and_then(|c| c.nickname.clone());
+            let nick = self
+                .doc
+                .contacts
+                .get(&k)
+                .filter(|c| !c.deleted)
+                .and_then(|c| c.nickname.clone());
             self.resolver.set_nickname(&k, nick.as_deref());
         }
     }
@@ -75,7 +83,11 @@ impl ContactManager {
             .filter(|c| {
                 q.is_empty()
                     || c.mxid.to_lowercase().contains(&q)
-                    || self.resolver.resolve(&c.mxid, None).to_lowercase().contains(&q)
+                    || self
+                        .resolver
+                        .resolve(&c.mxid, None)
+                        .to_lowercase()
+                        .contains(&q)
             })
             .collect()
     }
@@ -107,7 +119,12 @@ impl ContactManager {
     }
 
     /// `None` or blank resets to the public display name.
-    pub fn set_nickname(&mut self, mxid: &str, nick: Option<&str>, now: u64) -> Result<(), ContactError> {
+    pub fn set_nickname(
+        &mut self,
+        mxid: &str,
+        nick: Option<&str>,
+        now: u64,
+    ) -> Result<(), ContactError> {
         let nick = nick.map(str::trim).filter(|s| !s.is_empty());
         let c = self.live_mut(mxid)?;
         c.nickname = nick.map(str::to_owned);
@@ -163,7 +180,12 @@ impl ContactManager {
     }
 
     /// Deleting a group moves its contacts to `fallback` (must exist).
-    pub fn delete_group(&mut self, name: &str, fallback: &str, now: u64) -> Result<(), ContactError> {
+    pub fn delete_group(
+        &mut self,
+        name: &str,
+        fallback: &str,
+        now: u64,
+    ) -> Result<(), ContactError> {
         let idx = self.group_idx(name)?;
         if name == fallback || !self.doc.groups.iter().any(|g| g == fallback) {
             return Err(ContactError::GroupNotFound(fallback.to_owned()));
@@ -179,12 +201,18 @@ impl ContactManager {
     pub fn move_group(&mut self, name: &str, new_index: usize) -> Result<(), ContactError> {
         let idx = self.group_idx(name)?;
         let g = self.doc.groups.remove(idx);
-        self.doc.groups.insert(new_index.min(self.doc.groups.len()), g);
+        self.doc
+            .groups
+            .insert(new_index.min(self.doc.groups.len()), g);
         Ok(())
     }
 
     fn group_idx(&self, name: &str) -> Result<usize, ContactError> {
-        self.doc.groups.iter().position(|g| g == name).ok_or_else(|| ContactError::GroupNotFound(name.to_owned()))
+        self.doc
+            .groups
+            .iter()
+            .position(|g| g == name)
+            .ok_or_else(|| ContactError::GroupNotFound(name.to_owned()))
     }
 
     fn live_mut(&mut self, mxid: &str) -> Result<&mut Contact, ContactError> {
@@ -216,7 +244,10 @@ mod tests {
     #[test]
     fn add_validates_and_is_idempotent() {
         let mut m = ContactManager::default();
-        assert!(matches!(m.add("dmjc", 1), Err(ContactError::InvalidMxid(_))));
+        assert!(matches!(
+            m.add("dmjc", 1),
+            Err(ContactError::InvalidMxid(_))
+        ));
         m.add(U, 1).unwrap();
         m.set_nickname(U, Some("J"), 2).unwrap();
         m.add(U, 3).unwrap();
@@ -247,7 +278,10 @@ mod tests {
     fn groups_lifecycle() {
         let mut m = mgr();
         m.create_group("Gamers").unwrap();
-        assert_eq!(m.create_group("Gamers"), Err(ContactError::GroupExists("Gamers".into())));
+        assert_eq!(
+            m.create_group("Gamers"),
+            Err(ContactError::GroupExists("Gamers".into()))
+        );
         m.move_to_group(U, "Gamers", 2).unwrap();
         m.rename_group("Gamers", "Mates", 3).unwrap();
         assert_eq!(m.get(U).unwrap().group, "Mates");

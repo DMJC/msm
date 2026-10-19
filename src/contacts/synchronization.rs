@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::contact::{is_valid_mxid, Contact, DEFAULT_GROUPS};
+use super::contact::{Contact, DEFAULT_GROUPS, is_valid_mxid};
 
 pub const ACCOUNT_DATA_TYPE: &str = "com.matrixmessenger.contacts.v1";
 pub const SCHEMA_VERSION: u32 = 1;

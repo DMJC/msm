@@ -66,10 +66,10 @@ impl NameResolver {
         if let Some(n) = self.nicknames.get(mxid) {
             return n.clone();
         }
-        if let Some(room) = room_id {
-            if let Some(n) = self.room_names.get(&(room.to_owned(), mxid.to_owned())) {
-                return n.clone();
-            }
+        if let Some(room) = room_id
+            && let Some(n) = self.room_names.get(&(room.to_owned(), mxid.to_owned()))
+        {
+            return n.clone();
         }
         if let Some(n) = self.profile_names.get(mxid) {
             return n.clone();

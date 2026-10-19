@@ -1,5 +1,3 @@
-mod contacts;
-mod storage;
 mod ui;
 
 use gtk::prelude::*;

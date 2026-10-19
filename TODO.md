@@ -2,16 +2,17 @@
 ## Phase 1–2
 - [x] Verify toolchain, GTK3 and matrix-sdk dependency compatibility
 - [x] Cargo project + module skeleton (contacts, storage, ui)
-- [ ] Install/run rustfmt + clippy
+- [x] rustfmt + clippy installed and clean
 - [ ] Logging config, XDG paths, clean shutdown
-- [ ] Verify GTK window launches under a display
+- [x] GTK window launches under Wayland (no visual check)
 - [ ] docs/: ARCHITECTURE, REQUIREMENTS, MATRIX_COMPATIBILITY, SECURITY, TESTING, IMPLEMENTATION_STATUS
 ## Phase 3
-- [ ] Login / discovery / session restore / logout / sync loop / profile
-- [ ] Secure credential storage + fallback policy
+- [x] Login + discovery + sync loop with backoff (login verified vs Synapse)
+- [ ] Session restore / logout tested; profile fetch/set display name & avatar
+- [ ] Secure credential storage: implemented (oo7), untested
 ## Phase 4
 - [x] Contact model, resolver, manager, groups, LWW merge, SQLite cache (unit-tested)
-- [ ] Account-data read/write with Matrix, conflict re-fetch on write
+- [x] Account-data read/write with merge, verified across two installations vs Synapse
 - [ ] Contact list UI, nickname editing UI, resolver used by all UI
 - [ ] Ignored-user block/unblock
 ## Phase 5+
@@ -20,5 +21,5 @@
 - [ ] Presence, friend requests
 - [ ] E2EE + verification
 - [ ] Media, reactions, edits, redactions, search, receipts
-- [ ] Integration tests vs local Synapse + Element; acceptance scenario
+- [ ] Integration tests vs local Synapse (partial: login, nickname sync, DM) + Element; full acceptance scenario
 - [ ] Packaging, user docs

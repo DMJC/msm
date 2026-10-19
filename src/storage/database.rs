@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use thiserror::Error;
 
 use super::migrations::MIGRATIONS;
@@ -36,23 +36,41 @@ impl Database {
     fn init(mut conn: Connection) -> Result<Self, DbError> {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);")?;
-        let current: usize = conn.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);",
+        )?;
+        let current: usize = conn.query_row(
+            "SELECT COALESCE(MAX(version),0) FROM schema_migrations",
+            [],
+            |r| r.get(0),
+        )?;
         if current > MIGRATIONS.len() {
-            return Err(DbError::TooNew { found: current, supported: MIGRATIONS.len() });
+            return Err(DbError::TooNew {
+                found: current,
+                supported: MIGRATIONS.len(),
+            });
         }
         for (i, sql) in MIGRATIONS.iter().enumerate().skip(current) {
             let tx = conn.transaction()?;
             tx.execute_batch(sql)?;
-            tx.execute("INSERT INTO schema_migrations (version) VALUES (?1)", [i + 1])?;
+            tx.execute(
+                "INSERT INTO schema_migrations (version) VALUES (?1)",
+                [i + 1],
+            )?;
             tx.commit()?;
         }
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     pub fn schema_version(&self) -> Result<usize, DbError> {
         let c = self.lock();
-        Ok(c.query_row("SELECT COALESCE(MAX(version),0) FROM schema_migrations", [], |r| r.get(0))?)
+        Ok(c.query_row(
+            "SELECT COALESCE(MAX(version),0) FROM schema_migrations",
+            [],
+            |r| r.get(0),
+        )?)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -68,7 +86,10 @@ impl Database {
         tx.execute("DELETE FROM contacts", [])?;
         tx.execute("DELETE FROM contact_groups", [])?;
         for (i, g) in doc.groups.iter().enumerate() {
-            tx.execute("INSERT INTO contact_groups (position, name) VALUES (?1, ?2)", params![i as i64, g])?;
+            tx.execute(
+                "INSERT INTO contact_groups (position, name) VALUES (?1, ?2)",
+                params![i as i64, g],
+            )?;
         }
         for ct in doc.contacts.values() {
             tx.execute(
@@ -159,7 +180,10 @@ mod tests {
         assert_eq!(doc.contacts["@u:x"].nickname.as_deref(), Some("日本語"));
         assert!(doc.contacts["@u:x"].favorite);
         assert_eq!(doc.groups.last().unwrap(), "Gamers");
-        assert_eq!(db.get_setting("away_minutes").unwrap().as_deref(), Some("15"));
+        assert_eq!(
+            db.get_setting("away_minutes").unwrap().as_deref(),
+            Some("15")
+        );
         assert_eq!(db.get_setting("missing").unwrap(), None);
         std::fs::remove_dir_all(dir).ok();
     }
