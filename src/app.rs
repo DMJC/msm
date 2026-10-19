@@ -76,6 +76,8 @@ pub struct App {
     /// Wire presence for the sync loop (see `matrix::synchronization::run`).
     pub presence_tx: tokio::sync::watch::Sender<presence::Desired>,
     pub tray: RefCell<Option<ksni::Handle<MsmTray>>>,
+    /// Room invitations waiting for a decision.
+    pub invites: RefCell<Vec<rooms::Invite>>,
     /// Latest known presence of other users; absent means Unknown.
     pub contact_presence: RefCell<HashMap<String, (ContactPresence, Option<String>)>>,
 }
@@ -116,6 +118,7 @@ impl App {
             presence_msg: RefCell::new(presence_msg),
             presence_tx,
             tray: RefCell::new(None),
+            invites: RefCell::new(Vec::new()),
             contact_presence: RefCell::new(HashMap::new()),
         })
     }
@@ -148,7 +151,10 @@ impl App {
             while let Ok(ev) = rx.recv().await {
                 match ev {
                     SyncEvent::Connected => app.set_status("Connected"),
-                    SyncEvent::Synced => ui::main_window::refresh(&app),
+                    SyncEvent::Synced => {
+                        app.refresh_invites();
+                        ui::main_window::refresh(&app);
+                    }
                     SyncEvent::PresenceFailed(e) => {
                         // Many servers disable or restrict presence; degrade quietly.
                         tracing::warn!("presence update failed: {e}");
@@ -475,7 +481,7 @@ impl App {
         }
     }
 
-    fn notify(&self, room_id: &str, sender: &str, body: &str) {
+    pub fn notify(&self, room_id: &str, sender: &str, body: &str) {
         let Some(app) = self.window.application() else {
             return;
         };
@@ -486,6 +492,94 @@ impl App {
     }
 
     /// Open (or create) the DM with `mxid` and show its window.
+    /// Open a joined group room by ID.
+    pub fn open_room(self: &Rc<Self>, room_id: &str) {
+        let Some(client) = self.client.borrow().clone() else {
+            return;
+        };
+        if let Ok(id) = <&matrix_sdk::ruma::RoomId>::try_from(room_id)
+            && let Some(room) = client.get_room(id)
+        {
+            ui::conversation_window::open(self, room, None);
+        }
+    }
+
+    /// Re-read pending invitations; notify when a new one arrives.
+    pub fn refresh_invites(self: &Rc<Self>) {
+        let Some(client) = self.client.borrow().clone() else {
+            return;
+        };
+        let app = self.clone();
+        spawn_async(
+            async move { rooms::pending_invites(&client).await },
+            move |list| {
+                let known: Vec<String> = app
+                    .invites
+                    .borrow()
+                    .iter()
+                    .map(|i| i.room_id.clone())
+                    .collect();
+                for inv in list.iter().filter(|i| !known.contains(&i.room_id)) {
+                    let who = inv
+                        .inviter
+                        .as_deref()
+                        .map(|m| app.mgr.borrow().resolver().resolve(m, None))
+                        .unwrap_or_else(|| "Someone".to_owned());
+                    app.notify(&inv.room_id, &who, &format!("invited you to {}", inv.name));
+                }
+                let changed = *app.invites.borrow() != list;
+                *app.invites.borrow_mut() = list;
+                if changed {
+                    ui::main_window::refresh(&app);
+                }
+            },
+        );
+    }
+
+    pub fn answer_invite(self: &Rc<Self>, room_id: &str, accept: bool) {
+        let Some(client) = self.client.borrow().clone() else {
+            return;
+        };
+        let (app, rid) = (self.clone(), room_id.to_owned());
+        let rid2 = rid.clone();
+        spawn_async(
+            async move {
+                if accept {
+                    rooms::accept_invite(&client, &rid).await
+                } else {
+                    rooms::leave_room(&client, &rid).await
+                }
+                .map_err(|e| e.to_string())
+            },
+            move |res| {
+                match res {
+                    Ok(()) => app.invites.borrow_mut().retain(|i| i.room_id != rid2),
+                    Err(e) => app.set_status(&format!("Could not answer invitation: {e}")),
+                }
+                app.refresh_invites();
+                ui::main_window::refresh(&app);
+            },
+        );
+    }
+
+    pub fn create_room(self: &Rc<Self>, name: &str, invitees: Vec<String>) {
+        let Some(client) = self.client.borrow().clone() else {
+            return;
+        };
+        let (app, name) = (self.clone(), name.to_owned());
+        spawn_async(
+            async move {
+                rooms::create_group(&client, &name, &invitees)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            move |res| match res {
+                Ok(room) => ui::conversation_window::open(&app, room, None),
+                Err(e) => app.set_status(&format!("Could not create room: {e}")),
+            },
+        );
+    }
+
     pub fn open_conversation(self: &Rc<Self>, mxid: &str) {
         let Some(client) = self.client.borrow().clone() else {
             return;
@@ -500,7 +594,7 @@ impl App {
                     .map_err(|e| e.to_string())
             },
             move |res| match res {
-                Ok(room) => ui::conversation_window::open(&app, room, &id2),
+                Ok(room) => ui::conversation_window::open(&app, room, Some(&id2)),
                 Err(e) => app.set_status(&format!("Could not open conversation: {e}")),
             },
         );

@@ -17,7 +17,8 @@
 - [ ] Ignored-user block/unblock
 ## Phase 5+
 - [x] DM discovery (m.direct), messaging, conversation UI, typing (verified vs Synapse and in the GUI; not vs Element)
-- [ ] Group rooms/invites
+- [x] Group rooms/invites: list, create, invite, accept/decline, leave, room windows (verified vs Synapse + GUI)
+- [ ] Membership management beyond invite/leave (kick/ban, room settings)
 - [x] Own status + tray + presence publishing (verified vs Synapse and on Wayland/MATE panel)
 - [ ] Automatic Away timer
 - [ ] Contact presence display verified with two users sharing a room

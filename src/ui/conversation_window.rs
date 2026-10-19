@@ -19,7 +19,8 @@ const PAGE: u16 = 30;
 pub struct ConversationWindow {
     pub window: gtk::Window,
     pub room: Room,
-    pub peer: String,
+    /// Set for DMs; `None` for group rooms.
+    pub peer: Option<String>,
     app: Rc<App>,
     conv: RefCell<Conversation>,
     list: gtk::Box,
@@ -28,12 +29,14 @@ pub struct ConversationWindow {
     typing: gtk::Label,
     input: gtk::TextView,
     buffer: gtk::TextBuffer,
+    /// Joined member count once the member list has been loaded.
+    member_count: RefCell<Option<usize>>,
     older: RefCell<Option<String>>,
     older_button: gtk::Button,
     i_am_typing: RefCell<bool>,
 }
 
-pub fn open(app: &Rc<App>, room: Room, peer: &str) {
+pub fn open(app: &Rc<App>, room: Room, peer: Option<&str>) {
     let id = room.room_id().to_string();
     if let Some(existing) = app.conversations.borrow().get(&id) {
         existing.window.present();
@@ -48,7 +51,7 @@ pub fn open(app: &Rc<App>, room: Room, peer: &str) {
 }
 
 impl ConversationWindow {
-    fn new(app: &Rc<App>, room: Room, peer: &str) -> Rc<Self> {
+    fn new(app: &Rc<App>, room: Room, peer: Option<&str>) -> Rc<Self> {
         let window = gtk::Window::new(gtk::WindowType::Toplevel);
         window.set_default_size(460, 520);
         window.set_transient_for(Some(&app.window));
@@ -62,6 +65,17 @@ impl ConversationWindow {
         encrypted.style_context().add_class("dim-label");
         root.pack_start(&title, false, false, 0);
         root.pack_start(&encrypted, false, false, 0);
+        let is_room = peer.is_none();
+        let (invite_btn, leave_btn) = (
+            gtk::Button::with_label("Invite…"),
+            gtk::Button::with_label("Leave room"),
+        );
+        if is_room {
+            let controls = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            controls.pack_start(&invite_btn, false, false, 0);
+            controls.pack_start(&leave_btn, false, false, 0);
+            root.pack_start(&controls, false, false, 0);
+        }
 
         let older_button = gtk::Button::with_label("Load older messages");
         older_button.set_no_show_all(true);
@@ -102,7 +116,7 @@ impl ConversationWindow {
         let cw = Rc::new(Self {
             window,
             room,
-            peer: peer.to_owned(),
+            peer: peer.map(str::to_owned),
             app: app.clone(),
             conv: RefCell::new(Conversation::default()),
             list,
@@ -111,11 +125,64 @@ impl ConversationWindow {
             typing,
             input,
             buffer,
+            member_count: RefCell::new(None),
             older: RefCell::new(None),
             older_button,
             i_am_typing: RefCell::new(false),
         });
 
+        let c = cw.clone();
+        invite_btn.connect_clicked(move |_| {
+            if let Some(id) = crate::ui::main_window::prompt(
+                &c.app,
+                "Invite to room",
+                "Matrix ID (@user:server)",
+                "",
+            ) {
+                let room = c.room.clone();
+                let this = c.clone();
+                spawn_async(
+                    async move {
+                        rooms::invite_user(&room, &id)
+                            .await
+                            .map_err(|e| e.to_string())
+                    },
+                    move |res| {
+                        let msg = match res {
+                            Ok(()) => "Invitation sent".to_owned(),
+                            Err(e) => format!("Could not invite: {e}"),
+                        };
+                        this.typing.set_text(&msg);
+                    },
+                );
+            }
+        });
+        let c = cw.clone();
+        leave_btn.connect_clicked(move |_| {
+            let (app, rid) = (c.app.clone(), c.room.room_id().to_string());
+            let this = c.clone();
+            spawn_async(
+                {
+                    let (client, rid) = (app.client.borrow().clone(), rid.clone());
+                    async move {
+                        match client {
+                            Some(client) => rooms::leave_room(&client, &rid)
+                                .await
+                                .map_err(|e| e.to_string()),
+                            None => Err("not logged in".to_owned()),
+                        }
+                    }
+                },
+                move |res| match res {
+                    Ok(()) => {
+                        app.conversations.borrow_mut().remove(&rid);
+                        this.window.close();
+                        app.refresh();
+                    }
+                    Err(e) => this.typing.set_text(&format!("Could not leave: {e}")),
+                },
+            );
+        });
         let c = cw.clone();
         cw.older_button.connect_clicked(move |_| c.load_older());
         let c = cw.clone();
@@ -171,17 +238,53 @@ impl ConversationWindow {
     }
 
     fn update_header(&self) {
-        let name = self.name_of(&self.peer);
+        let (name, sub) = match &self.peer {
+            Some(peer) => (self.name_of(peer), peer.clone()),
+            None => (
+                rooms::cached_title(&self.room),
+                format!(
+                    "{} members",
+                    self.member_count
+                        .borrow()
+                        .unwrap_or_else(|| self.room.joined_members_count() as usize)
+                ),
+            ),
+        };
         self.window.set_title(&name);
         self.title.set_markup(&format!(
             "<b>{}</b>  <small>{}</small>",
             glib::markup_escape_text(&name),
-            glib::markup_escape_text(&self.peer)
+            glib::markup_escape_text(&sub)
         ));
+    }
+
+    /// Room-specific display names feed the shared resolver (below local nicknames).
+    fn load_member_names(self: &Rc<Self>) {
+        let room = self.room.clone();
+        let app = self.app.clone();
+        let rid = self.room.room_id().to_string();
+        let this = self.clone();
+        spawn_async(
+            async move {
+                let names = rooms::member_names(&room).await.unwrap_or_default();
+                (names, rooms::room_title(&room).await)
+            },
+            move |(names, _title)| {
+                *this.member_count.borrow_mut() = Some(names.len());
+                {
+                    let mut m = app.mgr.borrow_mut();
+                    for (mxid, name) in names {
+                        m.resolver_mut().set_room_name(&rid, &mxid, name.as_deref());
+                    }
+                }
+                app.refresh();
+            },
+        );
     }
 
     fn load_initial(self: &Rc<Self>) {
         self.fetch(None);
+        self.load_member_names();
     }
 
     fn load_older(self: &Rc<Self>) {

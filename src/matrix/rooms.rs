@@ -1,12 +1,18 @@
 //! Room-level operations: DM discovery/creation, history, sending, redaction,
 //! and the live event feed.
 
+use matrix_sdk::RoomMemberships;
 use matrix_sdk::deserialized_responses::TimelineEvent;
 use matrix_sdk::room::MessagesOptions;
 use matrix_sdk::ruma::api::client::receipt::create_receipt::v3::ReceiptType;
+use matrix_sdk::ruma::api::client::room::create_room::v3::{
+    Request as CreateRoomRequest, RoomPreset,
+};
 use matrix_sdk::ruma::events::AnySyncTimelineEvent;
+use matrix_sdk::ruma::events::InitialStateEvent;
 use matrix_sdk::ruma::events::presence::PresenceEvent;
 use matrix_sdk::ruma::events::receipt::ReceiptThread;
+use matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent;
 use matrix_sdk::ruma::events::room::member::MembershipState;
 use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
 use matrix_sdk::ruma::events::typing::SyncTypingEvent;
@@ -77,6 +83,119 @@ pub async fn mark_read(room: &Room, event_id: &str) {
     {
         tracing::debug!("read receipt failed: {e}");
     }
+}
+
+/// A room invitation waiting for a decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Invite {
+    pub room_id: String,
+    pub name: String,
+    pub inviter: Option<String>,
+    pub is_direct: bool,
+}
+
+pub async fn pending_invites(client: &Client) -> Vec<Invite> {
+    let mut out = Vec::new();
+    for room in client.invited_rooms() {
+        let name = room_title(&room).await;
+        let inviter = room
+            .invite_details()
+            .await
+            .ok()
+            .map(|d| d.inviter_id.to_string());
+        let is_direct = room.is_direct().await.unwrap_or(false);
+        out.push(Invite {
+            room_id: room.room_id().to_string(),
+            name,
+            inviter,
+            is_direct,
+        });
+    }
+    out
+}
+
+fn find_room(client: &Client, room_id: &str) -> Result<Room, RoomError> {
+    let id = <&matrix_sdk::ruma::RoomId>::try_from(room_id).map_err(mx)?;
+    client
+        .get_room(id)
+        .ok_or_else(|| RoomError::Matrix(format!("unknown room {room_id}")))
+}
+
+pub async fn accept_invite(client: &Client, room_id: &str) -> Result<(), RoomError> {
+    find_room(client, room_id)?.join().await.map_err(mx)
+}
+
+/// Decline an invitation (or leave a joined room).
+pub async fn leave_room(client: &Client, room_id: &str) -> Result<(), RoomError> {
+    find_room(client, room_id)?.leave().await.map_err(mx)
+}
+
+/// Joined rooms that are not DMs or spaces.
+pub fn group_rooms(client: &Client) -> Vec<Room> {
+    client
+        .joined_rooms()
+        .into_iter()
+        .filter(|r| r.direct_targets().is_empty() && !r.is_space())
+        .collect()
+}
+
+/// Best available room name; never blocks on the network.
+pub fn cached_title(room: &Room) -> String {
+    room.cached_display_name()
+        .map(|n| n.to_string())
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| room.room_id().to_string())
+}
+
+pub async fn room_title(room: &Room) -> String {
+    match room.display_name().await {
+        Ok(n) if !n.to_string().trim().is_empty() => n.to_string(),
+        _ => cached_title(room),
+    }
+}
+
+/// Create an encrypted private group room and invite `invitees` (Matrix IDs).
+pub async fn create_group(
+    client: &Client,
+    name: &str,
+    invitees: &[String],
+) -> Result<Room, RoomError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(RoomError::Matrix("room name must not be empty".into()));
+    }
+    let invite = invitees
+        .iter()
+        .map(|i| {
+            matrix_sdk::ruma::UserId::parse(i.trim()).map_err(|_| RoomError::InvalidUser(i.clone()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut req = CreateRoomRequest::new();
+    req.name = Some(name.to_owned());
+    req.invite = invite;
+    req.preset = Some(RoomPreset::PrivateChat);
+    req.initial_state = vec![
+        InitialStateEvent::with_empty_state_key(
+            RoomEncryptionEventContent::with_recommended_defaults(),
+        )
+        .to_raw_any(),
+    ];
+    client.create_room(req).await.map_err(mx)
+}
+
+pub async fn invite_user(room: &Room, mxid: &str) -> Result<(), RoomError> {
+    let uid =
+        <&UserId>::try_from(mxid.trim()).map_err(|_| RoomError::InvalidUser(mxid.to_owned()))?;
+    room.invite_user_by_id(uid).await.map_err(mx)
+}
+
+/// Joined members with their room-specific display names (from member state events).
+pub async fn member_names(room: &Room) -> Result<Vec<(String, Option<String>)>, RoomError> {
+    let members = room.members(RoomMemberships::JOIN).await.map_err(mx)?;
+    Ok(members
+        .iter()
+        .map(|m| (m.user_id().to_string(), m.display_name().map(str::to_owned)))
+        .collect())
 }
 
 pub struct History {

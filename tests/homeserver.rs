@@ -367,3 +367,131 @@ async fn sync_loop_keeps_chosen_presence() {
     assert!(seen(&c, &me, PresenceState::Online).await, "back online");
     task.abort();
 }
+
+#[tokio::test]
+async fn group_room_invite_accept_reject_message_and_members() {
+    let Some(hs) = homeserver() else { return };
+    let alice = login_as(&hs, "alice", "grp-alice").await;
+    let bob = login_as(&hs, "bob", "grp-bob").await;
+    let name = format!("Test room {}", std::process::id());
+
+    assert!(rooms::create_group(&alice, "  ", &[]).await.is_err());
+    assert!(
+        rooms::create_group(&alice, "x", &["nope".into()])
+            .await
+            .is_err()
+    );
+
+    let room = rooms::create_group(&alice, &name, &["@bob:localhost".into()])
+        .await
+        .unwrap();
+
+    // Bob sees the invitation, with inviter and name, and it is not a DM.
+    let mut invite = None;
+    for _ in 0..10 {
+        sync_a_bit(&bob).await;
+        invite = rooms::pending_invites(&bob)
+            .await
+            .into_iter()
+            .find(|i| i.room_id == room.room_id().as_str());
+        if invite.is_some() {
+            break;
+        }
+    }
+    let invite = invite.expect("bob should see the invitation");
+    assert_eq!(invite.inviter.as_deref(), Some("@alice:localhost"));
+    assert_eq!(invite.name, name);
+    assert!(!invite.is_direct);
+
+    rooms::accept_invite(&bob, &invite.room_id).await.unwrap();
+    sync_a_bit(&bob).await;
+    sync_a_bit(&alice).await;
+    assert!(
+        room.encryption_state().is_encrypted(),
+        "group rooms are created encrypted"
+    );
+    assert!(
+        rooms::pending_invites(&bob)
+            .await
+            .iter()
+            .all(|i| i.room_id != invite.room_id)
+    );
+    let bobs_groups = rooms::group_rooms(&bob);
+    let joined = bobs_groups
+        .iter()
+        .find(|r| r.room_id() == room.room_id())
+        .expect("group room listed");
+    assert_eq!(rooms::room_title(joined).await, name);
+
+    // Messages flow and are readable from history.
+    let body = format!("group hello {}", std::process::id());
+    rooms::send_text(&room, &body, matrix_sdk::ruma::TransactionId::new())
+        .await
+        .unwrap();
+    sync_a_bit(&bob).await;
+    let hist = rooms::load_history(joined, None, 20).await.unwrap();
+    let mut conv = Conversation::default();
+    for ev in hist.events {
+        conv.apply(ev);
+    }
+    let m = conv
+        .messages()
+        .iter()
+        .find(|m| m.body == body)
+        .expect("bob reads alice's message");
+    assert_eq!(m.sender, "@alice:localhost");
+
+    // Members carry their own (public/room) names; local nicknames are not involved.
+    let names = rooms::member_names(&room).await.unwrap();
+    assert!(names.iter().any(|(id, _)| id == "@alice:localhost"));
+    assert!(names.iter().any(|(id, _)| id == "@bob:localhost"));
+
+    // Inviting more people; bad IDs are rejected before any request.
+    assert!(rooms::invite_user(&room, "bad").await.is_err());
+    rooms::invite_user(&room, "@darkmage:localhost")
+        .await
+        .unwrap();
+
+    // Declining an invitation removes it.
+    let other = rooms::create_group(
+        &alice,
+        &format!("{name} (decline)"),
+        &["@bob:localhost".into()],
+    )
+    .await
+    .unwrap();
+    let mut seen = false;
+    for _ in 0..10 {
+        sync_a_bit(&bob).await;
+        if rooms::pending_invites(&bob)
+            .await
+            .iter()
+            .any(|i| i.room_id == other.room_id().as_str())
+        {
+            seen = true;
+            break;
+        }
+    }
+    assert!(seen);
+    rooms::leave_room(&bob, other.room_id().as_str())
+        .await
+        .unwrap();
+    sync_a_bit(&bob).await;
+    assert!(
+        rooms::pending_invites(&bob)
+            .await
+            .iter()
+            .all(|i| i.room_id != other.room_id().as_str())
+    );
+
+    // Leaving a joined room.
+    rooms::leave_room(&bob, room.room_id().as_str())
+        .await
+        .unwrap();
+    sync_a_bit(&bob).await;
+    assert!(
+        rooms::group_rooms(&bob)
+            .iter()
+            .all(|r| r.room_id() != room.room_id())
+    );
+}

@@ -31,6 +31,12 @@ Implementation notes (found by testing on Synapse):
 - The presence PUT can take many seconds; it runs off the sync loop, after one quick sync, in order.
 - Synapse may take ~10-20 s to reflect a change.
 
+## Group rooms and invitations
+Group rooms are joined rooms with no `m.direct` targets that are not spaces. New rooms are created private (`private_chat` preset)
+and encrypted. Invitations show the inviter and room name; declining uses a normal leave. Room-specific display names come
+from member state events and rank below local nicknames and above global profile names.
+Verified on Synapse: create/invite/accept/decline/leave, history, encrypted messages between members.
+
 ## Not yet implemented
 Automatic Away on inactivity, friend requests, device verification UI, media, edits sent from this client,
-reactions, group rooms.
+reactions, kick/ban and room settings.

@@ -51,16 +51,31 @@ UI is still a placeholder window.
   (Before the fix, only sessions created by this agent's own manual testing were affected; none were the user's.)
 - Tests: 40 unit + 8 integration (Synapse 1.163, local) pass; presence test passed 5/5 repeated runs; clippy/fmt clean apart from unused-code warnings.
 
+## Session 5
+- Phase 6 (group rooms + invitations):
+  - `matrix::rooms`: pending invites (with inviter), accept/decline, leave, create encrypted private room with invitees, invite more,
+    group-room listing (non-DM, non-space), room titles, member names (room-specific display names).
+  - UI: "Invitations" section (Accept/Decline) with notification on new invite, "Rooms" section (unread badges, double-click to open,
+    right-click Open/Leave), "New room" button, room windows with Invite/Leave and member count; room display names feed the shared
+    resolver (below local nicknames).
+  - Verified in the GUI (nested X server) against Synapse: invite appeared live, Accept moved it to Rooms, room opened, message sent,
+    state survives app restart (E2EE keys persisted, own message decrypted after restart); contact presence dot turned green once a room was shared.
+  - Integration test `group_room_invite_accept_reject_message_and_members` passes (encrypted room, invite/accept/decline/leave, history).
+- Bug fixed: the contact list was rebuilt on every sync event, which could swallow a double-click. It is now rebuilt only when
+  the displayed data changes (`view_signature`).
+- Tests: 40 unit + 9 integration pass; clippy and fmt clean.
+
 ## Known problems / not verified
-- Not tested against Element or other third-party clients; no cross-client encryption test; no device verification / key backup UI.
-- "Load older messages" button can show when there is nothing older (server returns an end token).
-- Closing the window to hide it was implemented but not exercised through a real click (toggle via tray menu was).
-- Automatic Away timer, friend requests, group rooms, media, reactions, sending edits, search, avatars: not implemented.
-- Unread counts sum across all DMs with a contact (fine normally; inflated in the test accounts that have many leftover rooms).
-- Contact cache assumes a single account.
-- Synapse for tests runs from a pip venv (`scripts/test-homeserver.sh <dir>`); it was stopped at the end of this session.
+- Not tested against Element or other third-party clients. Two-device encrypted history (a new device cannot read older messages) is expected Matrix behaviour; no key backup / verification UI exists yet.
+- Group nickname display (Alice's and Bob's independent nicknames in one room) is covered by resolver unit tests and the contact-sync integration test, not yet by a three-account GUI run (final acceptance scenario).
+- "Load older messages" can show when nothing older exists.
+- Hide-to-tray via an actual window-close click and the installed .desktop taskbar icon are not verified on the user's panel.
+- Not implemented: automatic Away timer, friend requests, media/file transfer, reactions, sending edits, in-conversation search, avatars, device verification, room membership management beyond invite/leave (kick/ban, power levels), room topic/name editing.
+- Contact cache assumes a single account. Unread counts sum all DMs with a contact.
+- Synapse for tests: pip venv (`scripts/test-homeserver.sh <dir>`); stopped at end of session.
 
 ## Exact next task
-1. Phase 6: group rooms (invites accept/reject UI, room windows with participant nickname resolution, membership events, room naming).
-2. Automatic Away on inactivity (configurable timer) feeding `App::set_my_presence`.
-3. Element interoperability test (run Element Web/another client against local Synapse) and encrypted-room interop; device verification UI.
+1. Automatic Away on inactivity (configurable timer; needs an idle source that works on Wayland, e.g. the session screensaver/idle D-Bus API, falling back to in-app activity) feeding `App::set_my_presence`; restore previous status on activity.
+2. Device verification + key backup/recovery UI (Phase 8), then encryption status indicators per message.
+3. Media/file attachments, reactions, sending edits (Phase 9).
+4. Third-party interop test (Element Web or another client against the local Synapse) and the three-account acceptance scenario.

@@ -16,6 +16,9 @@ pub struct MainUi {
     combo: gtk::ComboBoxText,
     msg_entry: gtk::Entry,
     updating: std::cell::Cell<bool>,
+    /// What the list currently shows; unchanged views are not rebuilt, because
+    /// destroying rows mid-click would swallow double-clicks.
+    last_view: std::cell::RefCell<String>,
 }
 
 impl MainUi {
@@ -90,11 +93,39 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     let bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let add = gtk::Button::with_label("Add contact");
     let group = gtk::Button::with_label("New group");
+    let room = gtk::Button::with_label("New room");
     let logout = gtk::Button::with_label("Sign out");
-    for b in [&add, &group, &logout] {
+    for b in [&add, &group] {
         bar.pack_start(b, true, true, 0);
     }
+    let bar2 = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    for b in [&room, &logout] {
+        bar2.pack_start(b, true, true, 0);
+    }
     root.pack_start(&bar, false, false, 0);
+    root.pack_start(&bar2, false, false, 0);
+
+    let a = app.clone();
+    room.connect_clicked(move |_| {
+        let Some(name) = prompt(&a, "New room", "Room name", "") else {
+            return;
+        };
+        let Some(who) = prompt(
+            &a,
+            "Invite people (optional)",
+            "Matrix IDs, comma separated",
+            "",
+        ) else {
+            return;
+        };
+        let invitees = who
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect();
+        a.create_room(&name, invitees);
+    });
 
     let a = app.clone();
     search.connect_search_changed(move |_| a.refresh());
@@ -137,6 +168,7 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         combo,
         msg_entry,
         updating: std::cell::Cell::new(false),
+        last_view: std::cell::RefCell::new(String::new()),
     });
     root.upcast()
 }
@@ -185,12 +217,18 @@ pub fn show(app: &Rc<App>, me: &str) {
 pub fn refresh(app: &Rc<App>) {
     let ui = app.main_ui.borrow();
     let Some(ui) = ui.as_ref() else { return };
+    let query = ui.search.text().to_string();
+    let view = view_signature(app, &query);
+    if *ui.last_view.borrow() == view {
+        return;
+    }
+    *ui.last_view.borrow_mut() = view;
     for child in ui.list.children() {
         ui.list.remove(&child);
     }
-    let query = ui.search.text().to_string();
     let mgr = app.mgr.borrow();
     let matches: Vec<Contact> = mgr.search(&query).into_iter().cloned().collect();
+    add_invites(app, &ui.list);
     let favourites: Vec<&Contact> = matches.iter().filter(|c| c.favorite).collect();
     if !favourites.is_empty() {
         add_group(app, &ui.list, "Favourites", &favourites, true);
@@ -202,7 +240,146 @@ pub fn refresh(app: &Rc<App>) {
         }
         add_group(app, &ui.list, &g, &members, false);
     }
+    add_rooms(app, &ui.list, &query);
     ui.list.show_all();
+}
+
+/// Everything the list displays, as one string, to detect real changes.
+fn view_signature(app: &Rc<App>, query: &str) -> String {
+    use std::fmt::Write;
+    let mut sig = format!("q={query}\n");
+    let mgr = app.mgr.borrow();
+    let _ = writeln!(sig, "groups={:?}", mgr.document().groups);
+    let pres = app.contact_presence.borrow();
+    for c in mgr.search(query) {
+        let _ = writeln!(
+            sig,
+            "c|{}|{}|{}|{}|{}|{:?}",
+            c.mxid,
+            mgr.resolver().resolve(&c.mxid, None),
+            c.group,
+            c.favorite,
+            app.unread_for(&c.mxid),
+            pres.get(&c.mxid)
+        );
+    }
+    for i in app.invites.borrow().iter() {
+        let who = i
+            .inviter
+            .as_deref()
+            .map(|m| mgr.resolver().resolve(m, None));
+        let _ = writeln!(sig, "i|{}|{}|{:?}|{}", i.room_id, i.name, who, i.is_direct);
+    }
+    if let Some(client) = app.client.borrow().as_ref() {
+        for r in msm::matrix::rooms::group_rooms(client) {
+            let _ = writeln!(
+                sig,
+                "r|{}|{}|{}",
+                r.room_id(),
+                msm::matrix::rooms::cached_title(&r),
+                msm::matrix::rooms::unread_count(&r)
+            );
+        }
+    }
+    sig
+}
+
+fn add_invites(app: &Rc<App>, list: &gtk::Box) {
+    let invites = app.invites.borrow().clone();
+    if invites.is_empty() {
+        return;
+    }
+    let exp = gtk::Expander::new(Some(&format!("Invitations ({})", invites.len())));
+    exp.set_expanded(true);
+    let inner = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    for inv in invites {
+        let who = inv
+            .inviter
+            .as_deref()
+            .map(|m| app.mgr.borrow().resolver().resolve(m, None))
+            .unwrap_or_else(|| "Someone".to_owned());
+        let row = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let l = gtk::Label::new(None);
+        l.set_xalign(0.0);
+        l.set_line_wrap(true);
+        l.set_markup(&format!(
+            "<b>{}</b>\n<small>{} invited you{}</small>",
+            gtk::glib::markup_escape_text(&inv.name),
+            gtk::glib::markup_escape_text(&who),
+            if inv.is_direct { " to a chat" } else { "" }
+        ));
+        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        let (yes, no) = (
+            gtk::Button::with_label("Accept"),
+            gtk::Button::with_label("Decline"),
+        );
+        buttons.pack_start(&yes, false, false, 0);
+        buttons.pack_start(&no, false, false, 0);
+        let (a, id) = (app.clone(), inv.room_id.clone());
+        yes.connect_clicked(move |_| a.answer_invite(&id, true));
+        let (a, id) = (app.clone(), inv.room_id.clone());
+        no.connect_clicked(move |_| a.answer_invite(&id, false));
+        row.pack_start(&l, false, false, 0);
+        row.pack_start(&buttons, false, false, 0);
+        row.set_margin_start(16);
+        inner.pack_start(&row, false, false, 0);
+    }
+    exp.add(&inner);
+    list.pack_start(&exp, false, false, 0);
+}
+
+fn add_rooms(app: &Rc<App>, list: &gtk::Box, query: &str) {
+    let Some(client) = app.client.borrow().clone() else {
+        return;
+    };
+    let q = query.trim().to_lowercase();
+    let mut rooms_list: Vec<_> = msm::matrix::rooms::group_rooms(&client)
+        .into_iter()
+        .map(|r| (msm::matrix::rooms::cached_title(&r), r))
+        .filter(|(n, _)| q.is_empty() || n.to_lowercase().contains(&q))
+        .collect();
+    rooms_list.sort_by_key(|(n, _)| n.to_lowercase());
+    if rooms_list.is_empty() && !q.is_empty() {
+        return;
+    }
+    let exp = gtk::Expander::new(Some(&format!("Rooms ({})", rooms_list.len())));
+    exp.set_expanded(true);
+    let inner = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    for (name, room) in rooms_list {
+        let unread = msm::matrix::rooms::unread_count(&room);
+        let l = gtk::Label::new(None);
+        l.set_xalign(0.0);
+        l.set_margin_start(16);
+        l.set_markup(&format!(
+            "{}{}",
+            gtk::glib::markup_escape_text(&name),
+            if unread > 0 {
+                format!("  <b><span foreground='#d33'>({unread})</span></b>")
+            } else {
+                String::new()
+            }
+        ));
+        let ev = gtk::EventBox::new();
+        ev.add(&l);
+        let (a, id) = (app.clone(), room.room_id().to_string());
+        ev.connect_button_press_event(move |_, e| {
+            if e.button() == 1 && e.event_type() == gtk::gdk::EventType::DoubleButtonPress {
+                a.open_room(&id);
+            } else if e.button() == 3 {
+                let menu = gtk::Menu::new();
+                let (a1, id1) = (a.clone(), id.clone());
+                menu.append(&item("Open", move || a1.open_room(&id1)));
+                let (a2, id2) = (a.clone(), id.clone());
+                menu.append(&item("Leave room", move || a2.answer_invite(&id2, false)));
+                menu.show_all();
+                menu.popup_at_pointer(Some(e));
+            }
+            gtk::glib::Propagation::Proceed
+        });
+        inner.pack_start(&ev, false, false, 0);
+    }
+    exp.add(&inner);
+    list.pack_start(&exp, false, false, 0);
 }
 
 fn add_group(app: &Rc<App>, list: &gtk::Box, name: &str, members: &[&Contact], favourites: bool) {
@@ -408,7 +585,7 @@ fn group_menu(app: &Rc<App>, group: &str) -> gtk::Menu {
 }
 
 /// Modal single-line prompt. Returns `None` if cancelled.
-fn prompt(app: &Rc<App>, title: &str, placeholder: &str, initial: &str) -> Option<String> {
+pub fn prompt(app: &Rc<App>, title: &str, placeholder: &str, initial: &str) -> Option<String> {
     let d = gtk::Dialog::with_buttons(
         Some(title),
         Some(&app.window),
