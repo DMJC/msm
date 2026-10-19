@@ -37,16 +37,49 @@ pub struct ChatMessage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Parsed {
     Message(ChatMessage),
-    Edit { target: String, body: String },
-    Redaction { target: String },
+    /// `sender` and `ts` matter: only the original sender may edit, and the newest edit wins.
+    Edit {
+        target: String,
+        sender: String,
+        ts: u64,
+        body: String,
+    },
+    Reaction(Reaction),
+    Redaction {
+        target: String,
+    },
+}
+
+/// One user's `m.reaction` annotation on a message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reaction {
+    /// Event ID of the reaction itself (redact this to remove it).
+    pub event_id: String,
+    pub target: String,
+    pub key: String,
+    pub sender: String,
+}
+
+/// Reactions on a message, grouped by emoji.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReactionSummary {
+    pub key: String,
+    pub senders: Vec<String>,
 }
 
 #[derive(Debug, Default)]
 pub struct Conversation {
     messages: Vec<ChatMessage>,
     index: HashMap<String, usize>,
-    early_edits: HashMap<String, String>,
+    /// Edits that arrived before their target: target -> (sender, ts, body).
+    early_edits: HashMap<String, (String, u64, String)>,
     early_redactions: Vec<String>,
+    /// Timestamp of the edit currently applied, so an older edit cannot overwrite a newer one.
+    edit_ts: HashMap<String, u64>,
+    /// Reactions by target message, in arrival order.
+    reactions: HashMap<String, Vec<Reaction>>,
+    /// Reaction event ID -> target, for dedupe and removal.
+    reaction_index: HashMap<String, String>,
 }
 
 impl Conversation {
@@ -57,7 +90,13 @@ impl Conversation {
     pub fn apply(&mut self, p: Parsed) {
         match p {
             Parsed::Message(m) => self.insert(m),
-            Parsed::Edit { target, body } => self.edit(&target, body),
+            Parsed::Edit {
+                target,
+                sender,
+                ts,
+                body,
+            } => self.edit(&target, &sender, ts, body),
+            Parsed::Reaction(r) => self.add_reaction(r),
             Parsed::Redaction { target } => self.redact(&target),
         }
     }
@@ -78,9 +117,12 @@ impl Conversation {
             self.index.insert(txn, i); // keep txn resolvable for late status updates
             return;
         }
-        if let Some(body) = self.early_edits.remove(&m.id) {
+        if let Some((sender, ts, body)) = self.early_edits.remove(&m.id)
+            && sender == m.sender
+        {
             m.body = body;
             m.edited = true;
+            self.edit_ts.insert(m.id.clone(), ts);
         }
         if let Some(pos) = self.early_redactions.iter().position(|r| *r == m.id) {
             self.early_redactions.swap_remove(pos);
@@ -136,20 +178,79 @@ impl Conversation {
         }
     }
 
-    pub fn edit(&mut self, target: &str, body: String) {
+    /// Apply an edit. Edits from anyone but the original sender are ignored
+    /// (Matrix requires the same sender), and a stale edit never replaces a newer one.
+    pub fn edit(&mut self, target: &str, sender: &str, ts: u64, body: String) {
+        let newer_exists = self.edit_ts.get(target).is_some_and(|&t| t > ts);
         match self.get_mut(target) {
-            Some(m) if !m.redacted => {
+            Some(m) if m.sender != sender => {}
+            Some(m) if !m.redacted && !newer_exists => {
                 m.body = body;
                 m.edited = true;
+                self.edit_ts.insert(target.to_owned(), ts);
             }
             Some(_) => {}
             None => {
-                self.early_edits.insert(target.to_owned(), body);
+                let replace = self
+                    .early_edits
+                    .get(target)
+                    .is_none_or(|(_, t, _)| *t <= ts);
+                if replace {
+                    self.early_edits
+                        .insert(target.to_owned(), (sender.to_owned(), ts, body));
+                }
             }
         }
     }
 
+    pub fn add_reaction(&mut self, r: Reaction) {
+        if self.reaction_index.contains_key(&r.event_id) {
+            return;
+        }
+        if let Some(pos) = self.early_redactions.iter().position(|x| *x == r.event_id) {
+            self.early_redactions.swap_remove(pos);
+            return; // redacted before we saw it
+        }
+        self.reaction_index
+            .insert(r.event_id.clone(), r.target.clone());
+        self.reactions.entry(r.target.clone()).or_default().push(r);
+    }
+
+    /// Reactions on `target`, grouped by emoji in order of first use.
+    pub fn reactions_for(&self, target: &str) -> Vec<ReactionSummary> {
+        let mut out: Vec<ReactionSummary> = Vec::new();
+        for r in self.reactions.get(target).into_iter().flatten() {
+            match out.iter_mut().find(|s| s.key == r.key) {
+                Some(s) => {
+                    if !s.senders.contains(&r.sender) {
+                        s.senders.push(r.sender.clone());
+                    }
+                }
+                None => out.push(ReactionSummary {
+                    key: r.key.clone(),
+                    senders: vec![r.sender.clone()],
+                }),
+            }
+        }
+        out
+    }
+
+    /// The event ID of `sender`'s reaction `key` on `target`, if any (to remove it).
+    pub fn own_reaction_event(&self, target: &str, key: &str, sender: &str) -> Option<String> {
+        self.reactions
+            .get(target)?
+            .iter()
+            .find(|r| r.key == key && r.sender == sender)
+            .map(|r| r.event_id.clone())
+    }
+
     pub fn redact(&mut self, target: &str) {
+        if let Some(msg) = self.reaction_index.remove(target) {
+            if let Some(list) = self.reactions.get_mut(&msg) {
+                list.retain(|r| r.event_id != target);
+            }
+            return;
+        }
         match self.get_mut(target) {
             Some(m) => {
                 m.redacted = true;
@@ -195,6 +296,8 @@ pub fn parse_event(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
             if let Some(Relation::Replacement(r)) = &e.content.relates_to {
                 return Some(Parsed::Edit {
                     target: r.event_id.to_string(),
+                    sender: e.sender.to_string(),
+                    ts: ts(e.origin_server_ts),
                     body: r.new_content.msgtype.body().to_owned(),
                 });
             }
@@ -248,6 +351,14 @@ pub fn parse_event(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
                 redacted: false,
                 undecryptable: true,
                 delivery: Delivery::Sent,
+            }))
+        }
+        AnySyncMessageLikeEvent::Reaction(SyncMessageLikeEvent::Original(e)) => {
+            Some(Parsed::Reaction(Reaction {
+                event_id: e.event_id.to_string(),
+                target: e.content.relates_to.event_id.to_string(),
+                key: e.content.relates_to.key.clone(),
+                sender: e.sender.to_string(),
             }))
         }
         AnySyncMessageLikeEvent::RoomRedaction(SyncRoomRedactionEvent::Original(e)) => {
@@ -324,7 +435,7 @@ mod tests {
     #[test]
     fn edit_and_redaction_apply_even_when_early() {
         let mut c = Conversation::default();
-        c.edit("$1", "fixed".into());
+        c.edit("$1", "@a:x", 5, "fixed".into());
         c.redact("$2");
         c.insert(msg("$1", 1, "typo"));
         c.insert(msg("$2", 2, "secret"));
@@ -333,7 +444,7 @@ mod tests {
         assert!(c.messages()[1].redacted);
         assert_eq!(c.messages()[1].body, "");
         c.redact("$1");
-        c.edit("$1", "ignored".into());
+        c.edit("$1", "@a:x", 6, "ignored".into());
         assert_eq!(c.messages()[0].body, "");
     }
 
@@ -399,6 +510,8 @@ mod tests {
             e,
             Some(Parsed::Edit {
                 target: "$1".into(),
+                sender: "@a:x".into(),
+                ts: 43,
                 body: "new".into()
             })
         );
@@ -441,6 +554,85 @@ mod tests {
                 json!({"type":"m.room.encrypted","event_id":"$9","sender":"@a:x","origin_server_ts":7,"content":{}})
             )),
             None
+        );
+    }
+
+    #[test]
+    fn edits_from_other_users_and_stale_edits_are_ignored() {
+        let mut c = Conversation::default();
+        c.insert(msg("$1", 1, "original"));
+        c.edit("$1", "@mallory:x", 10, "hijacked".into());
+        assert_eq!(c.messages()[0].body, "original");
+        assert!(!c.messages()[0].edited);
+        c.edit("$1", "@a:x", 20, "second".into());
+        c.edit("$1", "@a:x", 15, "older edit arriving late".into());
+        assert_eq!(c.messages()[0].body, "second");
+        // Early edits: wrong sender is dropped when the target arrives; newest early edit wins.
+        let mut d = Conversation::default();
+        d.edit("$2", "@mallory:x", 5, "hijacked".into());
+        d.edit("$3", "@a:x", 9, "newest".into());
+        d.edit("$3", "@a:x", 7, "stale".into());
+        d.insert(msg("$2", 1, "mine"));
+        d.insert(msg("$3", 2, "orig"));
+        assert_eq!(d.messages()[0].body, "mine");
+        assert_eq!(d.messages()[1].body, "newest");
+    }
+
+    fn reaction(id: &str, target: &str, key: &str, sender: &str) -> Reaction {
+        Reaction {
+            event_id: id.into(),
+            target: target.into(),
+            key: key.into(),
+            sender: sender.into(),
+        }
+    }
+
+    #[test]
+    fn reactions_group_dedupe_and_remove() {
+        let mut c = Conversation::default();
+        c.insert(msg("$1", 1, "hi"));
+        c.add_reaction(reaction("$r1", "$1", "👍", "@a:x"));
+        c.add_reaction(reaction("$r2", "$1", "👍", "@b:x"));
+        c.add_reaction(reaction("$r3", "$1", "❤️", "@a:x"));
+        c.add_reaction(reaction("$r1", "$1", "👍", "@a:x")); // duplicate delivery
+        let r = c.reactions_for("$1");
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].key, "👍");
+        assert_eq!(r[0].senders, ["@a:x", "@b:x"]);
+        assert_eq!(
+            c.own_reaction_event("$1", "👍", "@b:x").as_deref(),
+            Some("$r2")
+        );
+        // Redacting the reaction event removes just that user's reaction.
+        c.redact("$r2");
+        assert_eq!(c.reactions_for("$1")[0].senders, ["@a:x"]);
+        c.redact("$r1");
+        assert_eq!(c.reactions_for("$1").len(), 1);
+        assert_eq!(
+            c.messages().len(),
+            1,
+            "reaction redaction must not touch messages"
+        );
+        assert!(!c.messages()[0].redacted);
+    }
+
+    #[test]
+    fn reaction_redacted_before_it_arrives_never_shows() {
+        let mut c = Conversation::default();
+        c.redact("$r1");
+        c.add_reaction(reaction("$r1", "$1", "👍", "@a:x"));
+        assert!(c.reactions_for("$1").is_empty());
+    }
+
+    #[test]
+    fn parses_reaction_event() {
+        let r = parse_event(&raw(json!({
+            "type":"m.reaction","event_id":"$r","sender":"@b:x","origin_server_ts":9,
+            "content":{"m.relates_to":{"rel_type":"m.annotation","event_id":"$1","key":"🎉"}}
+        })));
+        assert_eq!(
+            r,
+            Some(Parsed::Reaction(reaction("$r", "$1", "🎉", "@b:x")))
         );
     }
 }

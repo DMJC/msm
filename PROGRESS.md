@@ -92,18 +92,31 @@ UI is still a placeholder window.
   `EnterError` and killed the app. Callbacks now run from an idle source. (Found by the GUI test; would have hit any error dialog shown after an async call.)
 - Tests: 42 unit + 10 integration pass; clippy/fmt clean.
 
+## Session 8
+- Phase 9 (advanced messaging), reactions + edits + emoji:
+  - `matrix::messages`: reactions (grouped by emoji, deduped, removable via redaction of the reaction event, early/late ordering handled),
+    edits now carry sender + timestamp: **edits by anyone other than the original sender are ignored** and a stale edit never overwrites a newer one
+    (previously any edit was accepted). Parser handles `m.reaction`.
+  - `matrix::rooms`: `send_edit` (m.replace), `send_reaction`.
+  - UI: right-click menu on a message (React submenu, Edit message..., Delete message) added via the label's own `populate-popup`
+    (a selectable GtkLabel swallows right-clicks, so the old Delete menu never appeared); clickable reaction chips (bold = includes mine, tooltip lists
+    people with nicknames applied); emoji picker button in the composer; "(edited)" no longer shown on deleted messages.
+  - Verified in the GUI (nested X server, two accounts): reaction arrived live, chip toggle, send, Edit... (shows "(edited)"), emoji picker insert + send,
+    Delete -> "message deleted". Integration test `edits_and_reactions_between_two_users` (foreign edit accepted by server but ignored; reactions add/remove) passes.
+- Tests: 46 unit + 11 integration pass; clippy/fmt clean.
+
 ## Known problems / not verified
-- No interactive device verification yet (emoji/SAS between two devices, verifying other users); only cross-signing/recovery. Per-message encryption indicators not done.
-- Recovery key reset / disable and signing out other devices are not implemented. Recovery tested on Synapse only.
-- Not tested against Element or other third-party clients.
+- Reactions/edits/emoji verified against Synapse and this client only (no Element). Edits of messages are text-only (no formatting/mentions).
+- No interactive device verification (SAS) yet; no per-message encryption indicators.
+- Not implemented: media/file attachments, avatars, in-conversation search, replies, friend requests, kick/ban and room settings,
+  recovery reset/disable.
 - The three-account GUI acceptance scenario (independent nicknames in a group) has not been run end to end.
 - "Load older messages" can show when nothing older exists.
 - Hide-to-tray via a real window-close click and the installed .desktop taskbar icon are unverified on the user's panel.
-- Not implemented: friend requests, media/file transfer, reactions, sending edits, in-conversation search, avatars, kick/ban and room settings.
 - Idle detection needs a Wayland compositor with ext-idle-notify-v1. Contact cache assumes a single account.
 
 ## Exact next task
-1. Interactive verification (SAS emoji) between own devices / other users + per-message encryption indicators.
-2. Media/file attachments, avatars, reactions, sending edits, in-conversation search (Phase 9).
-3. Friend requests (app-specific, over private data; separate from room invites).
-4. Third-party interop test (Element Web against local Synapse) and the three-account acceptance scenario.
+1. File/image attachments (upload via SDK media API, show filename/size, download/open; image thumbnails) and avatars (own avatar editing, contacts, caching).
+2. In-conversation search and replies.
+3. Interactive verification (SAS emoji) + per-message encryption indicators.
+4. Friend requests; third-party interop test (Element Web vs local Synapse); three-account acceptance scenario.

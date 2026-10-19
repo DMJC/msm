@@ -45,6 +45,11 @@ bootstraps cross-signing, which the server protects with a password challenge (s
 once and never stored by the app. Your own device always counts as locally trusted, so "verified" here means cross-signed.
 Interactive verification of other devices/users is not implemented yet.
 
+## Reactions and edits
+Reactions are standard `m.reaction` annotations (removing one redacts the reaction event); edits are `m.replace` relations.
+Per spec an edit is honoured only if it comes from the original message's sender; the newest edit wins regardless of arrival order.
+Verified between two accounts on Synapse, including that another user's "edit" is ignored.
+
 ## Group rooms and invitations
 Group rooms are joined rooms with no `m.direct` targets that are not spaces. New rooms are created private (`private_chat` preset)
 and encrypted. Invitations show the inviter and room name; declining uses a normal leave. Room-specific display names come

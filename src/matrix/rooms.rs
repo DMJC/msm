@@ -11,10 +11,14 @@ use matrix_sdk::ruma::api::client::room::create_room::v3::{
 use matrix_sdk::ruma::events::AnySyncTimelineEvent;
 use matrix_sdk::ruma::events::InitialStateEvent;
 use matrix_sdk::ruma::events::presence::PresenceEvent;
+use matrix_sdk::ruma::events::reaction::ReactionEventContent;
 use matrix_sdk::ruma::events::receipt::ReceiptThread;
+use matrix_sdk::ruma::events::relation::Annotation;
 use matrix_sdk::ruma::events::room::encryption::RoomEncryptionEventContent;
 use matrix_sdk::ruma::events::room::member::MembershipState;
-use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
+use matrix_sdk::ruma::events::room::message::{
+    ReplacementMetadata, RoomMessageEventContent, RoomMessageEventContentWithoutRelation,
+};
 use matrix_sdk::ruma::events::typing::SyncTypingEvent;
 use matrix_sdk::ruma::serde::Raw;
 use matrix_sdk::ruma::{OwnedTransactionId, UserId};
@@ -236,6 +240,36 @@ pub async fn send_text(
     let r = room
         .send(RoomMessageEventContent::text_plain(body))
         .with_transaction_id(txn_id)
+        .await
+        .map_err(mx)?;
+    Ok(r.response.event_id.to_string())
+}
+
+/// Replace the text of one of our own messages (an `m.replace` edit).
+pub async fn send_edit(
+    room: &Room,
+    target_event_id: &str,
+    new_body: &str,
+) -> Result<String, RoomError> {
+    let id = matrix_sdk::ruma::OwnedEventId::try_from(target_event_id).map_err(mx)?;
+    let content = RoomMessageEventContentWithoutRelation::text_plain(new_body)
+        .make_replacement(ReplacementMetadata::new(id, None));
+    let r = room.send(content).await.map_err(mx)?;
+    Ok(r.response.event_id.to_string())
+}
+
+/// React to a message; returns the reaction's event ID (redact it to remove the reaction).
+pub async fn send_reaction(
+    room: &Room,
+    target_event_id: &str,
+    key: &str,
+) -> Result<String, RoomError> {
+    let id = matrix_sdk::ruma::OwnedEventId::try_from(target_event_id).map_err(mx)?;
+    let r = room
+        .send(ReactionEventContent::new(Annotation::new(
+            id,
+            key.to_owned(),
+        )))
         .await
         .map_err(mx)?;
     Ok(r.response.event_id.to_string())

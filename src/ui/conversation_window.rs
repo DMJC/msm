@@ -9,12 +9,17 @@ use gtk::glib;
 use gtk::prelude::*;
 use matrix_sdk::Room;
 use matrix_sdk::ruma::OwnedTransactionId;
-use msm::matrix::messages::{ChatMessage, Conversation, Delivery, Parsed};
+use msm::matrix::messages::{ChatMessage, Conversation, Delivery, Parsed, Reaction};
 use msm::matrix::rooms;
 
 use crate::app::{App, now_ms, spawn_async};
 
 const PAGE: u16 = 30;
+const QUICK_REACTIONS: [&str; 6] = ["👍", "❤️", "😂", "🎉", "😮", "😢"];
+const EMOJI_PICKER: [&str; 32] = [
+    "😀", "😃", "😄", "😁", "😆", "😅", "😂", "🙂", "😉", "😊", "😍", "😘", "😎", "🤔", "😐", "😢",
+    "😭", "😡", "👍", "👎", "👏", "🙏", "💪", "🎉", "❤️", "🔥", "✨", "🌱", "☕", "🍕", "🎂", "👀",
+];
 
 pub struct ConversationWindow {
     pub window: gtk::Window,
@@ -100,9 +105,15 @@ impl ConversationWindow {
         in_scroll.set_shadow_type(gtk::ShadowType::In);
         in_scroll.add(&input);
         let send = gtk::Button::with_label("Send");
+        let emoji_btn = gtk::MenuButton::new();
+        emoji_btn.set_label("😀");
+        emoji_btn.set_tooltip_text(Some("Insert emoji"));
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         row.pack_start(&in_scroll, true, true, 0);
-        row.pack_start(&send, false, false, 0);
+        let side = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        side.pack_start(&emoji_btn, false, false, 0);
+        side.pack_start(&send, false, false, 0);
+        row.pack_start(&side, false, false, 0);
         root.pack_start(&row, false, false, 0);
         window.add(&root);
 
@@ -185,6 +196,23 @@ impl ConversationWindow {
         });
         let c = cw.clone();
         cw.older_button.connect_clicked(move |_| c.load_older());
+        let pop = gtk::Popover::new(Some(&emoji_btn));
+        let grid = gtk::Grid::new();
+        grid.set_margin(6);
+        for (i, e) in EMOJI_PICKER.iter().enumerate() {
+            let b = gtk::Button::with_label(e);
+            b.set_relief(gtk::ReliefStyle::None);
+            let (c, pop2, e) = (cw.clone(), pop.clone(), *e);
+            b.connect_clicked(move |_| {
+                c.buffer.insert_at_cursor(e);
+                pop2.popdown();
+                c.input.grab_focus();
+            });
+            grid.attach(&b, (i % 8) as i32, (i / 8) as i32, 1, 1);
+        }
+        grid.show_all();
+        pop.add(&grid);
+        emoji_btn.set_popover(Some(&pop));
         let c = cw.clone();
         send.connect_clicked(move |_| c.send_input());
         let c = cw.clone();
@@ -495,7 +523,7 @@ impl ConversationWindow {
             }
             Delivery::Sent => String::new(),
         };
-        let edited = if m.edited {
+        let edited = if m.edited && !m.redacted {
             " <small>(edited)</small>"
         } else {
             ""
@@ -521,23 +549,145 @@ impl ConversationWindow {
             btn.connect_clicked(move |_| this.retry(&txn));
             row.pack_start(&btn, false, false, 0);
         }
-        let ev = gtk::EventBox::new();
-        ev.add(&row);
-        if m.sender == me && !m.redacted && m.delivery == Delivery::Sent {
-            let (this, id) = (self.clone(), m.id.clone());
-            ev.connect_button_press_event(move |_, e| {
-                if e.button() == 3 {
-                    let menu = gtk::Menu::new();
-                    let item = gtk::MenuItem::with_label("Delete message");
-                    let (t2, id2) = (this.clone(), id.clone());
-                    item.connect_activate(move |_| t2.delete(&id2));
-                    menu.append(&item);
-                    menu.show_all();
-                    menu.popup_at_pointer(Some(e));
-                }
-                glib::Propagation::Proceed
+
+        // A selectable label handles right-clicks itself, so extend its own menu.
+        if m.delivery == Delivery::Sent && !m.redacted && m.id.starts_with('$') {
+            let (this, msg, mine) = (self.clone(), m.clone(), m.sender == me);
+            label.connect_populate_popup(move |_, menu| {
+                this.extend_menu(menu.upcast_ref(), &msg, mine);
             });
         }
-        ev.upcast()
+
+        let outer = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        outer.pack_start(&row, false, false, 0);
+        let chips = self.reaction_chips(m, me);
+        if let Some(chips) = chips {
+            outer.pack_start(&chips, false, false, 0);
+        }
+        outer.upcast()
+    }
+
+    fn extend_menu(self: &Rc<Self>, menu: &gtk::Menu, m: &ChatMessage, mine: bool) {
+        menu.append(&gtk::SeparatorMenuItem::new());
+        let react = gtk::MenuItem::with_label("React");
+        let sub = gtk::Menu::new();
+        for emoji in QUICK_REACTIONS {
+            let (this, id) = (self.clone(), m.id.clone());
+            let item = gtk::MenuItem::with_label(emoji);
+            item.connect_activate(move |_| this.toggle_reaction(&id, emoji));
+            sub.append(&item);
+        }
+        react.set_submenu(Some(&sub));
+        menu.append(&react);
+        if mine {
+            let (this, id, body) = (self.clone(), m.id.clone(), m.body.clone());
+            let edit = gtk::MenuItem::with_label("Edit message…");
+            edit.connect_activate(move |_| this.edit_message(&id, &body));
+            menu.append(&edit);
+            let (this, id) = (self.clone(), m.id.clone());
+            let del = gtk::MenuItem::with_label("Delete message");
+            del.connect_activate(move |_| this.delete(&id));
+            menu.append(&del);
+        }
+        menu.show_all();
+    }
+
+    /// Clickable reaction summary under a message; clicking toggles our own reaction.
+    fn reaction_chips(self: &Rc<Self>, m: &ChatMessage, me: &str) -> Option<gtk::Box> {
+        let summary = self.conv.borrow().reactions_for(&m.id);
+        if summary.is_empty() || m.redacted {
+            return None;
+        }
+        let chips = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        chips.set_margin_start(16);
+        for r in summary {
+            let mine = r.senders.iter().any(|s| s == me);
+            let btn = gtk::Button::new();
+            btn.set_relief(gtk::ReliefStyle::None);
+            let label = gtk::Label::new(None);
+            let text = format!("{} {}", glib::markup_escape_text(&r.key), r.senders.len());
+            label.set_markup(&if mine { format!("<b>{text}</b>") } else { text });
+            btn.add(&label);
+            let names: Vec<String> = r.senders.iter().map(|s| self.name_of(s)).collect();
+            btn.set_tooltip_text(Some(&names.join(", ")));
+            let (this, id, key) = (self.clone(), m.id.clone(), r.key.clone());
+            btn.connect_clicked(move |_| this.toggle_reaction(&id, &key));
+            chips.pack_start(&btn, false, false, 0);
+        }
+        Some(chips)
+    }
+
+    /// Add our reaction, or remove it if we already reacted with the same emoji.
+    fn toggle_reaction(self: &Rc<Self>, target: &str, key: &str) {
+        let me = self.me();
+        let existing = self.conv.borrow().own_reaction_event(target, key, &me);
+        let (room, this) = (self.room.clone(), self.clone());
+        let (target, key) = (target.to_owned(), key.to_owned());
+        match existing {
+            Some(rid) => spawn_async(
+                {
+                    let rid = rid.clone();
+                    async move { rooms::redact(&room, &rid).await.map_err(|e| e.to_string()) }
+                },
+                move |res| match res {
+                    Ok(()) => {
+                        this.conv.borrow_mut().redact(&rid);
+                        this.redraw(false);
+                    }
+                    Err(e) => this
+                        .typing
+                        .set_text(&format!("Could not remove reaction: {e}")),
+                },
+            ),
+            None => spawn_async(
+                {
+                    let (target, key) = (target.clone(), key.clone());
+                    async move {
+                        rooms::send_reaction(&room, &target, &key)
+                            .await
+                            .map_err(|e| e.to_string())
+                    }
+                },
+                move |res| match res {
+                    Ok(event_id) => {
+                        let me = this.me();
+                        this.conv.borrow_mut().add_reaction(Reaction {
+                            event_id,
+                            target,
+                            key,
+                            sender: me,
+                        });
+                        this.redraw(false);
+                    }
+                    Err(e) => this.typing.set_text(&format!("Could not react: {e}")),
+                },
+            ),
+        }
+    }
+
+    fn edit_message(self: &Rc<Self>, event_id: &str, current: &str) {
+        let Some(new_body) =
+            crate::ui::main_window::prompt(&self.app, "Edit message", "Message", current)
+        else {
+            return;
+        };
+        if new_body.trim().is_empty() || new_body == current {
+            return;
+        }
+        let (room, id, this) = (self.room.clone(), event_id.to_owned(), self.clone());
+        spawn_async(
+            async move {
+                rooms::send_edit(&room, &id, &new_body)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            move |res| {
+                // The edit shows up through the live event feed.
+                if let Err(e) = res {
+                    this.typing
+                        .set_text(&format!("Could not edit message: {e}"));
+                }
+            },
+        );
     }
 }

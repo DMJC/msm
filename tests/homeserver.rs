@@ -611,3 +611,82 @@ async fn recovery_key_lets_a_new_device_read_old_encrypted_history() {
 async fn login_as_with(hs: &str, user: &str, pw: &str, tag: &str) -> Client {
     login_unsaved(hs, user, pw, &tmp(tag)).await.unwrap().0
 }
+
+async fn history_of(room: &matrix_sdk::Room) -> Conversation {
+    let h = rooms::load_history(room, None, 50).await.unwrap();
+    let mut c = Conversation::default();
+    for e in h.events {
+        c.apply(e);
+    }
+    c
+}
+
+#[tokio::test]
+async fn edits_and_reactions_between_two_users() {
+    let Some(hs) = homeserver() else { return };
+    let alice = login_as(&hs, "alice", "er-alice").await;
+    let bob = login_as(&hs, "bob", "er-bob").await;
+    let room = rooms::create_group(
+        &alice,
+        &format!("Edits {}", std::process::id()),
+        &["@bob:localhost".into()],
+    )
+    .await
+    .unwrap();
+    for _ in 0..10 {
+        sync_a_bit(&bob).await;
+        if !bob.invited_rooms().is_empty() {
+            break;
+        }
+    }
+    for r in bob.invited_rooms() {
+        r.join().await.unwrap();
+    }
+    sync_a_bit(&bob).await;
+    // Alice must learn Bob joined (and his devices) before sending, or she won't share the room key.
+    sync_a_bit(&alice).await;
+    let broom = bob.get_room(room.room_id()).expect("bob joined");
+
+    let id = rooms::send_text(
+        &room,
+        "teh original",
+        matrix_sdk::ruma::TransactionId::new(),
+    )
+    .await
+    .unwrap();
+    sync_a_bit(&alice).await;
+    // Bob receives the room key via sync; reading history before that finds only undecryptable events.
+    sync_a_bit(&bob).await;
+
+    // Author edits: everyone sees the new text, marked edited.
+    rooms::send_edit(&room, &id, "the original").await.unwrap();
+    // Someone else "edits" it: the server accepts the event, clients must ignore it.
+    rooms::send_edit(&broom, &id, "bob was here").await.unwrap();
+    let conv = history_of(&broom).await;
+    let m = conv
+        .messages()
+        .iter()
+        .find(|m| m.id == id)
+        .expect("message");
+    assert_eq!(m.body, "the original");
+    assert!(m.edited);
+
+    // Reactions: grouped, attributed, removable.
+    let r1 = rooms::send_reaction(&broom, &id, "👍").await.unwrap();
+    rooms::send_reaction(&room, &id, "👍").await.unwrap();
+    let conv = history_of(&room).await;
+    let rs = conv.reactions_for(&id);
+    assert_eq!(rs.len(), 1);
+    assert_eq!(rs[0].key, "👍");
+    assert_eq!(rs[0].senders.len(), 2);
+    assert_eq!(
+        conv.own_reaction_event(&id, "👍", "@bob:localhost")
+            .as_deref(),
+        Some(r1.as_str())
+    );
+
+    rooms::redact(&broom, &r1).await.unwrap();
+    let conv = history_of(&room).await;
+    let rs = conv.reactions_for(&id);
+    assert_eq!(rs[0].senders, ["@alice:localhost"]);
+}

@@ -26,7 +26,8 @@
 - [x] Cross-signing + recovery key + key backup (verified vs Synapse and in the GUI)
 - [ ] Interactive device verification (SAS), per-message encryption indicators
 - [x] Redaction (delete own message), read receipts, unread counts
-- [ ] Media, reactions, sending edits, search
+- [x] Reactions, sending edits, emoji picker (verified vs Synapse + GUI)
+- [ ] Media/file attachments, avatars, in-conversation search, replies
 - [ ] Integration tests vs local Synapse (partial: login, nickname sync, DM) + Element; full acceptance scenario
 - [ ] Packaging, user docs
 
