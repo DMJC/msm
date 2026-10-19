@@ -117,6 +117,9 @@ impl Dialog {
             ));
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             row.pack_start(&label, true, true, 0);
+            if m.can_set_role {
+                row.pack_end(&self.role_button(m), false, false, 0);
+            }
             if m.can_kick {
                 row.pack_end(&self.action("Kick", &m.mxid, Action::Kick), false, false, 0);
             }
@@ -134,6 +137,51 @@ impl Dialog {
             self.members.pack_start(&row, false, false, 0);
         }
         self.members.show_all();
+    }
+
+    fn role_button(self: &Rc<Self>, m: &rooms::MemberRow) -> gtk::MenuButton {
+        let button = gtk::MenuButton::new();
+        button.set_label("Role");
+        let menu = gtk::Menu::new();
+        for (level, name) in rooms::ROLES {
+            let item = gtk::CheckMenuItem::with_label(name);
+            item.set_draw_as_radio(true);
+            item.set_active(m.power == level);
+            let (this, mxid) = (self.clone(), m.mxid.clone());
+            item.connect_activate(move |i| {
+                // Activation also fires when the check state is set programmatically.
+                if i.is_active() {
+                    this.set_role(&mxid, level);
+                }
+            });
+            menu.append(&item);
+        }
+        menu.show_all();
+        button.set_popup(Some(&menu));
+        button
+    }
+
+    fn set_role(self: &Rc<Self>, mxid: &str, level: i64) {
+        let (this, room, id) = (self.clone(), self.room.clone(), mxid.to_owned());
+        spawn_async(
+            async move {
+                rooms::set_role(&room, &id, level)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            move |res| match res {
+                Ok(()) => {
+                    this.status.set_text("Role changed.");
+                    this.load(false);
+                    let later = this.clone();
+                    glib::timeout_add_local_once(
+                        std::time::Duration::from_millis(2000),
+                        move || later.load(false),
+                    );
+                }
+                Err(e) => error_dialog(&this.app, &format!("Could not change the role: {e}")),
+            },
+        );
     }
 
     fn action(self: &Rc<Self>, label: &str, mxid: &str, action: Action) -> gtk::Button {

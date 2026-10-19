@@ -1225,6 +1225,26 @@ async fn kick_ban_unban_and_room_settings_respect_power_levels() {
     assert!(rooms::kick(&broom, &c, "").await.is_err());
     assert!(rooms::set_room_name(&broom, "hijack").await.is_err());
 
+    // Roles: the creator may promote, an ordinary member may not.
+    assert!(carol_row.can_set_role);
+    assert!(!row(&s, &id(&alice)).unwrap().can_set_role);
+    assert!(!row(&bs, &c).unwrap().can_set_role);
+    assert!(rooms::set_role(&broom, &c, 50).await.is_err());
+    rooms::set_role(&room, &b, 50).await.unwrap();
+    sync_a_bit(&alice).await;
+    sync_a_bit(&bob).await;
+    let s = rooms::room_settings(&room).await.unwrap();
+    assert_eq!(row(&s, &b).unwrap().power, 50);
+    // A moderator can now kick but not promote above themselves, nor touch the admin.
+    let bs = rooms::room_settings(&broom).await.unwrap();
+    assert!(row(&bs, &c).unwrap().can_kick);
+    assert!(!row(&bs, &id(&alice)).unwrap().can_set_role);
+    assert!(rooms::set_role(&broom, &c, 100).await.is_err());
+    rooms::set_role(&room, &b, 0).await.unwrap();
+    sync_a_bit(&alice).await;
+    let s = rooms::room_settings(&room).await.unwrap();
+    assert_eq!(row(&s, &b).unwrap().power, 0, "back to member");
+
     // Name and topic changes reach the other members.
     assert!(rooms::set_room_name(&room, "  ").await.is_err());
     rooms::set_room_name(&room, "Renamed").await.unwrap();

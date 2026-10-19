@@ -213,6 +213,8 @@ pub struct MemberRow {
     pub can_kick: bool,
     pub can_ban: bool,
     pub can_unban: bool,
+    /// Whether we may change this member's power level (never our own).
+    pub can_set_role: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,6 +262,9 @@ pub async fn room_settings(room: &Room) -> Result<RoomSettings, RoomError> {
             can_kick: !is_me && !banned && pl.user_can_kick_user(&me, target),
             can_ban: !is_me && !banned && pl.user_can_ban_user(&me, target),
             can_unban: banned && pl.user_can_unban_user(&me, target),
+            can_set_role: !is_me
+                && membership == MemberState::Joined
+                && pl.user_can_change_user_power_level(&me, target),
         });
     }
     members.sort_by(|a, b| {
@@ -296,6 +301,20 @@ pub async fn ban(room: &Room, mxid: &str, why: &str) -> Result<(), RoomError> {
 pub async fn unban(room: &Room, mxid: &str) -> Result<(), RoomError> {
     let uid = <&UserId>::try_from(mxid).map_err(|_| RoomError::InvalidUser(mxid.to_owned()))?;
     room.unban_user(uid, None).await.map_err(mx)
+}
+
+/// Power levels offered in the UI: (level, label).
+pub const ROLES: [(i64, &str); 3] = [(0, "Member"), (50, "Moderator"), (100, "Admin")];
+
+/// Set a member's power level. The server rejects levels above our own.
+pub async fn set_role(room: &Room, mxid: &str, level: i64) -> Result<(), RoomError> {
+    let uid = <&UserId>::try_from(mxid).map_err(|_| RoomError::InvalidUser(mxid.to_owned()))?;
+    let level =
+        i32::try_from(level).map_err(|_| RoomError::Matrix("invalid power level".into()))?;
+    room.update_power_levels(vec![(uid, level.into())])
+        .await
+        .map_err(mx)?;
+    Ok(())
 }
 
 pub async fn set_room_name(room: &Room, name: &str) -> Result<(), RoomError> {
