@@ -1,14 +1,63 @@
+mod app;
 mod ui;
 
 use gtk::prelude::*;
+use msm::matrix::authentication;
+use msm::storage::database::Database;
 
 fn main() -> gtk::glib::ExitCode {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                // The SDK logs expected 404s (e.g. no contacts account data yet) at ERROR.
+                .unwrap_or_else(|_| "info,matrix_sdk::http_client=off".into()),
+        )
         .init();
     let app = gtk::Application::builder()
         .application_id("com.matrixmessenger.Msm")
         .build();
-    app.connect_activate(ui::main_window::build);
+    app.connect_activate(activate);
     app.run()
+}
+
+fn activate(gtk_app: &gtk::Application) {
+    if let Some(w) = gtk_app.active_window() {
+        w.present();
+        return;
+    }
+    let dir = authentication::data_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let db = match Database::open(&dir.join("app.db")) {
+        Ok(db) => db,
+        Err(e) => {
+            tracing::error!("cannot open app database: {e}");
+            Database::open_in_memory().expect("in-memory database")
+        }
+    };
+
+    let window = gtk::ApplicationWindow::builder()
+        .application(gtk_app)
+        .title("Matrix Messenger")
+        .default_width(320)
+        .default_height(640)
+        .build();
+    let stack = gtk::Stack::new();
+    window.add(&stack);
+
+    let state = app::App::new(window.clone(), stack.clone(), db);
+    stack.add_named(&ui::login_window::build(&state), "login");
+    stack.add_named(&ui::main_window::build(&state), "main");
+    window.show_all();
+    stack.set_visible_child_name("login");
+
+    // Try to resume a saved session before asking for credentials.
+    let s = state.clone();
+    app::spawn_async(
+        async move { authentication::restore(&authentication::data_dir()).await },
+        move |res| match res {
+            Ok(Some(client)) => s.start_session(client),
+            Ok(None) => {}
+            Err(e) => s.show_login(Some(&e.to_string())),
+        },
+    );
 }

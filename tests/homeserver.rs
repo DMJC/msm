@@ -140,3 +140,40 @@ async fn dm_round_trip() {
     }
     assert_eq!(got.as_deref(), Some(text.as_str()));
 }
+
+/// Exercises the real secret store + restore + logout. Skips if no keyring is usable.
+#[tokio::test]
+async fn session_persists_restores_and_logout_wipes() {
+    let Some(hs) = homeserver() else { return };
+    if msm::matrix::secrets::save("probe", "x").await.is_err() {
+        eprintln!("SKIP: no secure credential store available");
+        return;
+    }
+    let _ = msm::matrix::secrets::delete("probe").await;
+
+    let dir = tmp("persist");
+    let c = msm::matrix::authentication::login(&hs, "bob", "pw-bob-123", &dir)
+        .await
+        .unwrap();
+    let uid = c.user_id().unwrap().to_owned();
+    drop(c);
+
+    let restored = msm::matrix::authentication::restore(&dir)
+        .await
+        .unwrap()
+        .expect("session should restore");
+    assert_eq!(restored.user_id().unwrap(), uid);
+    restored
+        .sync_once(SyncSettings::default().timeout(Duration::from_secs(1)))
+        .await
+        .unwrap();
+
+    msm::matrix::authentication::logout(&restored, &dir).await;
+    assert!(
+        msm::matrix::authentication::restore(&dir)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(!dir.join("matrix-store").exists());
+}

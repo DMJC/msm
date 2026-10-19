@@ -19,14 +19,24 @@ UI is still a placeholder window.
     Darkmage's public profile unchanged; DM create -> invite -> join -> message delivered (unicode).
   - Results: `cargo test` = 25 unit + 3 integration passed.
 
+## Session 3
+- Added test: session persist -> restore -> logout wipes (real keyring worked here; test skips if none). 4 integration tests pass.
+- Real GTK UI: `app.rs` (state, tokio bridge `spawn_async`), login page, main window (own name/MXID, status, search,
+  favourites + expandable groups, right-click contact menu: rename/reset/favourite/move/remove, group menu: rename/up/delete,
+  Add contact, New group, Sign out). Names go through NameResolver; public display names fetched async; every edit persists to
+  SQLite and merges/pushes to account data.
+- Verified by running the app against Synapse with a seeded session: restored as @alice:localhost, showed "Connected", and
+  showed Darkmage under Other as "James Carthew" (nickname synced from account data). Only that one screenshot-based check; menus/dialogs/login form were NOT clicked through (no input automation on Wayland here).
+- Fixed a RefCell borrow smell in login handler; silenced SDK's expected-404 ERROR logs.
+
 ## Known problems / not verified
 - No Element interoperability test; no E2EE test (DM test used an unencrypted DM? create_dm may enable encryption by default — not checked).
-- Restore-session path, logout, and keyring usage untested.
 - Docker unusable (permission denied); Synapse runs from a pip venv instead.
 - libsecret headers absent (oo7 is pure Rust, so not required).
-- No UI beyond placeholder; the resolver isn't used by UI yet.
+- UI interactions (dialogs, context menus, login form) not exercised by hand or automation.
+- No avatars, presence, messaging UI yet. Single-account assumption in the local contact cache.
 
 ## Exact next task
-Build the real login window + main contact-list window (GTK3): login form -> `login`/`restore`, tokio runtime held in a OnceLock,
-`SyncEvent` channel consumed with `glib::MainContext::spawn_local`; contact list from `ContactManager` loaded from `Database`,
-grouped/expandable, context menu for rename/move/favourite/remove, using `NameResolver` everywhere. Then add tests for restore/logout against Synapse.
+Phase 5: conversation windows. DM discovery via `m.direct` (+ create when absent), message timeline (matrix-sdk-ui Timeline or
+event handlers), send/pending/failed states, typing indicator, unread badges on the contact list, desktop notifications using the resolver.
+Add integration tests for DM discovery via m.direct created by another client.

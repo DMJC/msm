@@ -8,12 +8,12 @@
 - [ ] docs/: ARCHITECTURE, REQUIREMENTS, MATRIX_COMPATIBILITY, SECURITY, TESTING, IMPLEMENTATION_STATUS
 ## Phase 3
 - [x] Login + discovery + sync loop with backoff (login verified vs Synapse)
-- [ ] Session restore / logout tested; profile fetch/set display name & avatar
-- [ ] Secure credential storage: implemented (oo7), untested
+- [x] Session restore / logout verified vs Synapse; profile fetch/set display name & avatar
+- [x] Secure credential storage (oo7), verified with real keyring
 ## Phase 4
 - [x] Contact model, resolver, manager, groups, LWW merge, SQLite cache (unit-tested)
 - [x] Account-data read/write with merge, verified across two installations vs Synapse
-- [ ] Contact list UI, nickname editing UI, resolver used by all UI
+- [x] Contact list UI, nickname editing UI using resolver (launch-verified; interactions not exercised)
 - [ ] Ignored-user block/unblock
 ## Phase 5+
 - [ ] DM discovery (m.direct), messaging, conversation UI, typing
