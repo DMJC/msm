@@ -186,6 +186,7 @@ UI is still a placeholder window.
 ## Session 17
 - Other users' avatar changes show up live: `avatars::watch_changes` reports a member event whose avatar differs from `prev_content`; the app drops the cached `u:<mxid>` avatar and refreshes. Integration test `avatar_change_in_a_shared_room_is_reported` passes (2 avatar tests, clippy clean); full suite and the GUI not re-run.
 - Placeholder avatars show the contact's initial (cairo text on the flat colour; unit test for initials, rendering checked by dumping a PNG; not looked at in the running GUI).
+- Reply quotes are clickable and scroll to the original (clearing a search that hides it; a hint if it is older than what is loaded). Verified in the GUI with the original scrolled out of view. Placeholder initials only for people, not rooms (checked live: room tiles were all "R" before).
 - Verification-request unread count: investigated, it is SDK/server behaviour, left as a known problem.
 
 ## Known problems / not verified

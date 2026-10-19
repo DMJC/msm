@@ -647,6 +647,33 @@ impl ConversationWindow {
         }
     }
 
+    /// Scroll to the message with `event_id`, clearing a search that hides it.
+    /// Does nothing if it is older than what has been loaded.
+    fn jump_to(self: &Rc<Self>, event_id: &str) {
+        if self.conv.borrow().find(event_id).is_none() {
+            self.typing
+                .set_text("That message is older than what is loaded; use “Load older messages”.");
+            return;
+        }
+        if !self.search.text().trim().is_empty() {
+            self.search.set_text("");
+            self.redraw(false);
+        }
+        let (this, id) = (self.clone(), event_id.to_owned());
+        glib::idle_add_local_once(move || {
+            let target = this
+                .list
+                .children()
+                .into_iter()
+                .find(|c| c.widget_name() == id);
+            if let Some(y) = target.and_then(|w| w.translate_coordinates(&this.list, 0, 0)) {
+                let adj = this.scroll.vadjustment();
+                let y = f64::from(y.1).clamp(0.0, (adj.upper() - adj.page_size()).max(0.0));
+                adj.set_value(y);
+            }
+        });
+    }
+
     fn message_row(self: &Rc<Self>, m: &ChatMessage, me: &str) -> gtk::Widget {
         let name = self.name_of(&m.sender);
         let time = glib::DateTime::from_unix_local((m.ts / 1000) as i64)
@@ -748,6 +775,7 @@ impl ConversationWindow {
         }
 
         let outer = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        outer.set_widget_name(&m.id);
         if let Some(target) = &m.reply_to {
             let quote = gtk::Label::new(None);
             quote.set_xalign(0.0);
@@ -763,7 +791,17 @@ impl ConversationWindow {
                 None => "↪ an earlier message".to_owned(),
             };
             quote.set_markup(&format!("<small>{text}</small>"));
-            outer.pack_start(&quote, false, false, 0);
+            let click = gtk::EventBox::new();
+            click.add(&quote);
+            click.set_tooltip_text(Some("Jump to the original message"));
+            let (this, target) = (self.clone(), target.clone());
+            click.connect_button_press_event(move |_, ev| {
+                if ev.button() == 1 {
+                    this.jump_to(&target);
+                }
+                glib::Propagation::Stop
+            });
+            outer.pack_start(&click, false, false, 0);
         }
         outer.pack_start(&row, false, false, 0);
         if let (Some(att), false) = (&m.attachment, m.redacted)

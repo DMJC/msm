@@ -1,5 +1,6 @@
 # TODO
 ## Phase 1–2
+- [ ] Add GPLv3 License header to all files. Copyright James Carthew 2026 don't reference claude as a contributor.
 - [x] Verify toolchain, GTK3 and matrix-sdk dependency compatibility
 - [x] Cargo project + module skeleton (contacts, storage, ui)
 - [x] rustfmt + clippy installed and clean

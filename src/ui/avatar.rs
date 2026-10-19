@@ -47,9 +47,10 @@ pub fn placeholder(key: &str) -> Pixbuf {
     draw_initial(letter, (r, g, b)).unwrap_or_else(flat)
 }
 
-/// First letter or digit of the name part of a key such as `u:@alice:server`, upper-cased.
+/// First letter or digit of a user key such as `u:@alice:server`, upper-cased.
 fn initial(key: &str) -> Option<char> {
-    let name = key.strip_prefix("u:").unwrap_or(key);
+    // Room keys carry an opaque ID, so only people get a letter.
+    let name = key.strip_prefix("u:")?;
     name.chars()
         .find(|c| c.is_alphanumeric())
         .map(|c| c.to_uppercase().next().unwrap_or(c))
@@ -139,7 +140,8 @@ mod tests {
     #[test]
     fn initials_skip_sigils_and_uppercase() {
         assert_eq!(initial("u:@alice:x"), Some('A'));
-        assert_eq!(initial("@9bob:x"), Some('9'));
+        assert_eq!(initial("u:@9bob:x"), Some('9'));
+        assert_eq!(initial("r:!abc:x"), None);
         assert_eq!(initial(""), None);
         assert_eq!(initial("u:@:"), None);
     }
