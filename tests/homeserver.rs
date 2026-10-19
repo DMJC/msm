@@ -1245,6 +1245,38 @@ async fn kick_ban_unban_and_room_settings_respect_power_levels() {
     let s = rooms::room_settings(&room).await.unwrap();
     assert_eq!(row(&s, &b).unwrap().power, 0, "back to member");
 
+    // Room picture: only those allowed to send m.room.avatar, and it reaches members.
+    let png: Vec<u8> = vec![
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8,
+        0xcf, 0xc0, 0xf0, 0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99, 0x3d, 0x1d, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+    let mime = "image/png".parse().unwrap();
+    assert!(rooms::room_settings(&room).await.unwrap().can_set_avatar);
+    sync_a_bit(&bob).await;
+    assert!(!rooms::room_settings(&broom).await.unwrap().can_set_avatar);
+    assert!(
+        msm::matrix::avatars::set_room_avatar(&broom, &mime, png.clone())
+            .await
+            .is_err()
+    );
+    msm::matrix::avatars::set_room_avatar(&room, &mime, png)
+        .await
+        .unwrap();
+    sync_a_bit(&bob).await;
+    assert!(broom.avatar_url().is_some(), "members see the room picture");
+    assert!(
+        msm::matrix::avatars::room_avatar(&broom).await.is_some(),
+        "and can fetch it"
+    );
+    msm::matrix::avatars::remove_room_avatar(&room)
+        .await
+        .unwrap();
+    sync_a_bit(&bob).await;
+    assert!(broom.avatar_url().is_none());
+
     // Name and topic changes reach the other members.
     assert!(rooms::set_room_name(&room, "  ").await.is_err());
     rooms::set_room_name(&room, "Renamed").await.unwrap();

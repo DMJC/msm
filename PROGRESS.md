@@ -177,7 +177,7 @@ UI is still a placeholder window.
 - Room settings and moderation: "Members & settings…" in group room windows (`src/ui/room_dialog.rs`, `rooms::room_settings/kick/ban/unban/set_room_name/set_room_topic`).
   - Lists joined, invited and banned members with admin/moderator tags; Kick/Ban/Unban buttons appear only if the room's power levels allow us to act on that member (never on ourselves); name/topic fields are disabled without permission. Kick/Ban ask for an optional reason. The server still enforces permissions.
   - Verified: integration test (creator vs ordinary member permissions, rename/topic reach others, kick, ban, banned can't be re-invited, unban) and GUI (non-admin sees disabled fields and no buttons; admin saved a topic, kicked, banned and unbanned with the list refreshing).
-  - Not done: room avatar, room join rules/visibility, reporting.
+  - Not done: room join rules/visibility, reporting.
 
 ## Session 16
 - "Load older messages" no longer shows when the first page already reached the start of the room (`load_history` drops the continuation token for a short page). Integration test `history_pagination_ends_at_the_start_of_the_room` (paging terminates, nothing older for a short room). Not re-checked in the GUI.
@@ -191,6 +191,7 @@ UI is still a placeholder window.
 - Paste image: Ctrl+V with an image on the clipboard sends it as a PNG attachment (temp file deleted afterwards); text paste is unchanged. Verified in the GUI with a clipboard-owning helper: uploaded and previewed.
 - Full suite after Session 17 changes: 59 unit + 4 bin + 20 integration pass against local Synapse (integration takes about 61 s).
 - Role changes: a "Role" menu (Member/Moderator/Admin) per joined member in Members & settings, shown only when power levels allow (`MemberRow.can_set_role`, `rooms::set_role`). Integration test (promote, moderator limits, demote; non-admin refused) and GUI (promoted and demoted a member, list refreshed) verified. Custom power levels other than 0/50/100 are shown but can't be set.
+- Room picture: "Change picture…" / "Remove picture" in Members & settings, enabled only if we may send `m.room.avatar` (`avatars::set_room_avatar/remove_room_avatar`, `RoomSettings.can_set_avatar`). Integration test (creator sets, member refused, member sees and fetches it, removal) and GUI (picture chosen via the file dialog, shown in the conversation header) verified.
 - Verification-request unread count: investigated, it is SDK/server behaviour, left as a known problem.
 
 ## Known problems / not verified

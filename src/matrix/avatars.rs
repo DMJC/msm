@@ -94,6 +94,27 @@ pub async fn remove_own_avatar(client: &Client) -> Result<(), AvatarError> {
     client.account().set_avatar_url(None).await.map_err(mx)
 }
 
+/// Upload `data` and make it the room's picture (needs permission to send `m.room.avatar`).
+pub async fn set_room_avatar(
+    room: &Room,
+    mime: &mime_guess::mime::Mime,
+    data: Vec<u8>,
+) -> Result<(), AvatarError> {
+    if data.len() > MAX_UPLOAD_BYTES {
+        return Err(AvatarError::TooLarge {
+            limit: MAX_UPLOAD_BYTES / (1024 * 1024),
+        });
+    }
+    room.upload_avatar(mime, data, None)
+        .await
+        .map(|_| ())
+        .map_err(mx)
+}
+
+pub async fn remove_room_avatar(room: &Room) -> Result<(), AvatarError> {
+    room.remove_avatar().await.map(|_| ()).map_err(mx)
+}
+
 /// Reports the MXID of every user whose profile picture changed in a room we are in,
 /// so cached avatars can be dropped instead of staying stale until a restart.
 pub fn watch_changes(client: &Client, tx: async_channel::Sender<String>) {

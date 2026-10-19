@@ -231,6 +231,7 @@ pub struct RoomSettings {
     pub topic: Option<String>,
     pub can_rename: bool,
     pub can_set_topic: bool,
+    pub can_set_avatar: bool,
     pub members: Vec<MemberRow>,
 }
 
@@ -279,6 +280,7 @@ pub async fn room_settings(room: &Room) -> Result<RoomSettings, RoomError> {
         topic: room.topic(),
         can_rename: pl.user_can_send_state(&me, StateEventType::RoomName),
         can_set_topic: pl.user_can_send_state(&me, StateEventType::RoomTopic),
+        can_set_avatar: pl.user_can_send_state(&me, StateEventType::RoomAvatar),
         members,
     })
 }

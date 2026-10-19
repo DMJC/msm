@@ -7,6 +7,7 @@ use gtk::glib;
 use gtk::prelude::*;
 use matrix_sdk::Room;
 use msm::matrix::rooms::{self, MemberState, RoomSettings};
+use msm::matrix::{avatars, media};
 
 use crate::app::{App, spawn_async};
 use crate::ui::main_window::{error_dialog, prompt};
@@ -19,6 +20,8 @@ struct Dialog {
     save: gtk::Button,
     status: gtk::Label,
     members: gtk::Box,
+    change_picture: gtk::Button,
+    remove_picture: gtk::Button,
 }
 
 pub fn open(app: &Rc<App>, room: Room) {
@@ -38,6 +41,11 @@ pub fn open(app: &Rc<App>, room: Room) {
     status.set_xalign(0.0);
     status.set_line_wrap(true);
     status.style_context().add_class("dim-label");
+    let change_picture = gtk::Button::with_label("Change picture…");
+    let remove_picture = gtk::Button::with_label("Remove picture");
+    let pictures = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    pictures.pack_start(&change_picture, true, true, 0);
+    pictures.pack_start(&remove_picture, true, true, 0);
     let members = gtk::Box::new(gtk::Orientation::Vertical, 2);
     let scroll = gtk::ScrolledWindow::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
     scroll.add(&members);
@@ -47,6 +55,7 @@ pub fn open(app: &Rc<App>, room: Room) {
 
     root.pack_start(&name, false, false, 0);
     root.pack_start(&topic, false, false, 0);
+    root.pack_start(&pictures, false, false, 0);
     root.pack_start(&save, false, false, 0);
     root.pack_start(&status, false, false, 0);
     root.pack_start(&heading, false, false, 0);
@@ -61,9 +70,17 @@ pub fn open(app: &Rc<App>, room: Room) {
         save,
         status,
         members,
+        change_picture,
+        remove_picture,
     });
     let dd = d.clone();
     d.save.connect_clicked(move |_| dd.save_settings());
+    let dd = d.clone();
+    d.change_picture
+        .connect_clicked(move |_| dd.choose_picture());
+    let dd = d.clone();
+    d.remove_picture
+        .connect_clicked(move |_| dd.change_avatar(None));
     d.load(true);
     window.show_all();
 }
@@ -90,6 +107,8 @@ impl Dialog {
         self.name.set_sensitive(s.can_rename);
         self.topic.set_sensitive(s.can_set_topic);
         self.save.set_sensitive(s.can_rename || s.can_set_topic);
+        self.change_picture.set_sensitive(s.can_set_avatar);
+        self.remove_picture.set_sensitive(s.can_set_avatar);
         if !(s.can_rename || s.can_set_topic) {
             self.status
                 .set_text("You don't have permission to change this room's settings.");
@@ -227,6 +246,57 @@ impl Dialog {
                     );
                 }
                 Err(e) => error_dialog(&this.app, &format!("Could not do that: {e}")),
+            },
+        );
+    }
+
+    fn choose_picture(self: &Rc<Self>) {
+        let d = gtk::FileChooserDialog::with_buttons(
+            Some("Choose a room picture"),
+            Some(&self.app.window),
+            gtk::FileChooserAction::Open,
+            &[
+                ("Cancel", gtk::ResponseType::Cancel),
+                ("Use picture", gtk::ResponseType::Accept),
+            ],
+        );
+        let filter = gtk::FileFilter::new();
+        filter.set_name(Some("Images"));
+        filter.add_mime_type("image/*");
+        d.add_filter(filter);
+        let chosen = (d.run() == gtk::ResponseType::Accept)
+            .then(|| d.filename())
+            .flatten();
+        d.close();
+        if let Some(path) = chosen {
+            self.change_avatar(Some(path));
+        }
+    }
+
+    /// Set the room picture from a file, or remove it with `None`.
+    fn change_avatar(self: &Rc<Self>, path: Option<std::path::PathBuf>) {
+        let (this, room) = (self.clone(), self.room.clone());
+        self.status.set_text("Updating picture…");
+        spawn_async(
+            async move {
+                match path {
+                    Some(p) => {
+                        let data = std::fs::read(&p).map_err(|e| e.to_string())?;
+                        avatars::set_room_avatar(&room, &media::guess_mime(&p), data).await
+                    }
+                    None => avatars::remove_room_avatar(&room).await,
+                }
+                .map_err(|e| e.to_string())
+            },
+            move |res| match res {
+                Ok(()) => {
+                    this.status.set_text("Picture updated.");
+                    // The room's avatar URL (and so its cache key) changes after the next sync.
+                    crate::ui::main_window::refresh(&this.app);
+                }
+                Err(e) => this
+                    .status
+                    .set_text(&format!("Could not update the picture: {e}")),
             },
         );
     }
