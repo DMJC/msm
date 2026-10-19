@@ -36,9 +36,64 @@ pub fn placeholder(key: &str) -> Pixbuf {
         (h ^ u32::from(b)).wrapping_mul(16777619)
     });
     let (r, g, b) = hsv_to_rgb((hash % 360) as f32, 0.45, 0.75);
-    let pb = Pixbuf::new(Colorspace::Rgb, false, 8, SIZE, SIZE).expect("pixbuf allocation");
-    pb.fill(u32::from_be_bytes([r, g, b, 0xff]));
-    pb
+    let flat = || {
+        let pb = Pixbuf::new(Colorspace::Rgb, false, 8, SIZE, SIZE).expect("pixbuf allocation");
+        pb.fill(u32::from_be_bytes([r, g, b, 0xff]));
+        pb
+    };
+    let Some(letter) = initial(key) else {
+        return flat();
+    };
+    draw_initial(letter, (r, g, b)).unwrap_or_else(flat)
+}
+
+/// First letter or digit of the name part of a key such as `u:@alice:server`, upper-cased.
+fn initial(key: &str) -> Option<char> {
+    let name = key.strip_prefix("u:").unwrap_or(key);
+    name.chars()
+        .find(|c| c.is_alphanumeric())
+        .map(|c| c.to_uppercase().next().unwrap_or(c))
+}
+
+fn draw_initial(letter: char, (r, g, b): (u8, u8, u8)) -> Option<Pixbuf> {
+    use gtk::cairo::{Context, FontSlant, FontWeight, Format, ImageSurface};
+    let surface = ImageSurface::create(Format::ARgb32, SIZE, SIZE).ok()?;
+    {
+        let cr = Context::new(&surface).ok()?;
+        let c = |v: u8| f64::from(v) / 255.0;
+        cr.set_source_rgb(c(r), c(g), c(b));
+        cr.paint().ok()?;
+        cr.select_font_face("sans-serif", FontSlant::Normal, FontWeight::Bold);
+        cr.set_font_size(f64::from(SIZE) * 0.55);
+        cr.set_source_rgb(1.0, 1.0, 1.0);
+        let text = letter.to_string();
+        let ext = cr.text_extents(&text).ok()?;
+        let side = f64::from(SIZE);
+        cr.move_to(
+            (side - ext.width()) / 2.0 - ext.x_bearing(),
+            (side - ext.height()) / 2.0 - ext.y_bearing(),
+        );
+        cr.show_text(&text).ok()?;
+    }
+    // The surface is opaque ARGB32 (BGRA bytes on little-endian); repack as RGB.
+    let stride = surface.stride() as usize;
+    let data = surface.take_data().ok()?;
+    let mut rgb = Vec::with_capacity((SIZE * SIZE * 3) as usize);
+    for row in 0..SIZE as usize {
+        for px in data[row * stride..][..SIZE as usize * 4].as_chunks::<4>().0 {
+            let argb = u32::from_ne_bytes(*px);
+            rgb.extend([(argb >> 16) as u8, (argb >> 8) as u8, argb as u8]);
+        }
+    }
+    Some(Pixbuf::from_bytes(
+        &gtk::glib::Bytes::from_owned(rgb),
+        Colorspace::Rgb,
+        false,
+        8,
+        SIZE,
+        SIZE,
+        SIZE * 3,
+    ))
 }
 
 fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
@@ -79,6 +134,14 @@ mod tests {
     fn garbage_and_empty_data_are_rejected() {
         assert!(decode(b"definitely not an image").is_none());
         assert!(decode(&[]).is_none());
+    }
+
+    #[test]
+    fn initials_skip_sigils_and_uppercase() {
+        assert_eq!(initial("u:@alice:x"), Some('A'));
+        assert_eq!(initial("@9bob:x"), Some('9'));
+        assert_eq!(initial(""), None);
+        assert_eq!(initial("u:@:"), None);
     }
 
     #[test]
