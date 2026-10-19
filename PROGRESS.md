@@ -193,7 +193,7 @@ UI is still a placeholder window.
 - Verification needs both sides to already know each other's keys (e.g. a shared room) and the peer to have accepted the DM. The green ✔ states are not GUI-verified.
 - The verification-request message in the DM counts as an unread message. This comes from the SDK's client-side unread count (any `m.room.message` from another user counts) and the server's count; not fixed.
 - QR-code verification and verifying with a recovery key from a new device UI are not implemented.
-- Search covers only messages already loaded (no server-side search); replies to unloaded messages show "an earlier message"; no jump-to-original.
+- Search covers only messages already loaded (no server-side search); replies to unloaded messages show "an earlier message"; jump-to-original works only for loaded messages.
 - Other users' avatar changes are now noticed live (Session 17: member-event watcher drops the cached avatar; integration test only, not seen in the GUI);  no avatar zoom/preview.
 - Image previews decode untrusted data with gdk-pixbuf (size-limited, failures ignored); "Open" hands files to the default application, as other clients do.
 - No upload progress / cancel, no drag-and-drop or paste-image, no thumbnails sent with images, no audio/video playback (they appear as files).
