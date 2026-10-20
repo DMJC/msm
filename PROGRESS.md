@@ -217,3 +217,7 @@ UI is still a placeholder window.
 - Full suite re-run found `invite_user` failing ("device is not verified") once the invitee had a cross-signing identity (accounts used in the Element SAS runs). Cause: matrix-sdk shares room history before inviting and aborts if this device is not cross-signed. `rooms::invite_user` now falls back to a plain invite request in that case.
 - Results: 59 unit + 4 bin + 20 integration pass, clippy clean.
 - Next task unchanged: GTK ✔ check for SAS-verified users, Element presence/avatar in msm, optional three-account GUI run.
+
+## Session 17 addendum: ✔ path review
+- The contact-list/conversation ✔ comes from `App::verified_users` (app.rs ~610), filled with `get_user_identity(..).is_verified()` — the same predicate `emoji_verification_between_two_users` asserts true after SAS (and false before/after a mismatch). Verified by code path + that test; not by a live GTK screenshot with two real accounts.
+- Next task: optional three-account GUI run; Element presence/avatar inside msm.
