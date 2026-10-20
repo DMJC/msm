@@ -35,13 +35,13 @@
 - [x] In-conversation search (loaded messages), replies (verified vs Synapse + GUI)
 - [x] Integration tests vs local Synapse (17 tests) and an Element Web interop run (text, replies, edits, reactions, redactions, attachments, avatar); [ ] Element checks for verification, presence
 - [ ] Video/Audio calls
-- [x] README with install and usage (scripts/install-local.sh); [ ] distro packaging
+- [x] README with install and usage (scripts/install-local.sh); [x] distro packaging (deb, rpm)
 
 ## Platform
 - [x] Native Wayland (GTK3), StatusNotifierItem tray with status menu
 - [ ] Verify taskbar icon via installed .desktop on the user's panel
 - [ ] Hide-to-tray on window close verified by a real click
-- [ ] Debian .deb package automated builds
-- [ ] Redhat .rpm package automated builds
+- [x] Debian .deb: `cargo deb` metadata + scripts/build-packages.sh (built and inspected locally; extracted binary starts); CI workflow .github/workflows/packages.yml written but never run (no remote)
+- [x] RPM: `cargo generate-rpm` metadata, built and its file/dependency list inspected; not installed on an RPM-based system
 - [ ] Microsoft Windows compatible client
 - [ ] Windows arm/x86_64 .exe automated builds.

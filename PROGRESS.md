@@ -281,3 +281,8 @@ UI is still a placeholder window.
 - Verified: 7 unit tests (content round trip, parsing, malformed input, local-time parsing, DB behaviour, message parsing), integration test over an encrypted room (invitation → structured read by Bob, answer read by Alice), and a live two-instance GUI run (alice invites → bob sees the card → Tentative → alice sees the answer, bob's Calendar window lists it as tentative). Full suite 66+4+23 pass, clippy clean.
 - A GUI run caught a bug (my new 📅 button shadowed the existing "Invite…" button variable, so it opened the room-invite prompt); fixed before commit.
 - Not done: recurrence, editing/cancelling an invitation, reminders, calendar sync across installations, time zones other than the viewer's local one, showing RSVP summaries on the invitation.
+
+## Session 17 addendum: packaging
+- `Cargo.toml` has `[package.metadata.deb]` and `[package.metadata.generate-rpm]`; `scripts/build-packages.sh` builds both into `target/packages/` (needs `cargo install cargo-deb cargo-generate-rpm`). Verified: both files build; `dpkg-deb -I/-c` shows the right control data, auto-detected GTK/cairo/glib dependencies, binary, desktop entry, icon, README, copyright; `rpm -qpl/-qpR` lists the same files and requires gtk3; the extracted .deb binary starts under Xephyr.
+- Not verified: actually installing either package (needs root / an rpm-based distro), the GitHub Actions workflow (no remote configured, never run), the rpm's runtime dependency names on Fedora.
+- Windows client/builds remain untouched.

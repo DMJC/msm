@@ -3,6 +3,7 @@ name = "msm"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
+description = "MSN-Messenger-style desktop client for Matrix"
 
 [dependencies]
 async-channel = "2.5.0"
@@ -30,3 +31,31 @@ wayland-protocols = { version = "0.32.13", features = ["client", "staging"] }
 
 [dev-dependencies]
 async-channel = "2.5.0"
+
+[package.metadata.deb]
+maintainer = "James Carthew <jcarthew@gmail.com>"
+copyright = "2026, James Carthew"
+license-file = ["COPYING", "0"]
+extended-description = "An MSN-Messenger-style desktop client for Matrix (GTK3, matrix-rust-sdk) with private contact nicknames, groups, presence, end-to-end encryption and calendar invitations."
+section = "net"
+priority = "optional"
+depends = "$auto"
+recommends = "gnome-keyring | kwalletd5 | kwalletd6"
+assets = [
+    ["target/release/msm", "usr/bin/", "755"],
+    ["data/com.matrixmessenger.Msm.desktop", "usr/share/applications/", "644"],
+    ["data/icons/hicolor/scalable/apps/com.matrixmessenger.Msm.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+    ["README.md", "usr/share/doc/msm/", "644"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/msm", dest = "/usr/bin/msm", mode = "755" },
+    { source = "data/com.matrixmessenger.Msm.desktop", dest = "/usr/share/applications/com.matrixmessenger.Msm.desktop", mode = "644" },
+    { source = "data/icons/hicolor/scalable/apps/com.matrixmessenger.Msm.svg", dest = "/usr/share/icons/hicolor/scalable/apps/com.matrixmessenger.Msm.svg", mode = "644" },
+    { source = "README.md", dest = "/usr/share/doc/msm/README.md", mode = "644", doc = true },
+    { source = "COPYING", dest = "/usr/share/licenses/msm/COPYING", mode = "644", license = true },
+]
+
+[package.metadata.generate-rpm.requires]
+gtk3 = "*"

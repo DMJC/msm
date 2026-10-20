@@ -1,0 +1,20 @@
+name: packages
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libssl-dev libsqlite3-dev pkg-config build-essential
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-deb cargo-generate-rpm --locked
+      - run: cargo test --lib
+      - run: scripts/build-packages.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: target/packages/*
