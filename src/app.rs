@@ -226,6 +226,8 @@ impl App {
             }
         });
 
+        crate::reminders::start(self);
+
         // Incoming verification requests open the verification window.
         let (vtx, vrx) = async_channel::unbounded();
         msm::matrix::verification::watch_incoming(&client, vtx);

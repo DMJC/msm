@@ -221,6 +221,36 @@ pub fn parse(content: &Value) -> Option<Entry> {
     }
 }
 
+/// How long before an event its reminder fires.
+pub const REMINDER_LEAD_MS: u64 = 10 * 60 * 1000;
+/// An event that began this recently still gets a reminder (the app was closed or asleep).
+pub const REMINDER_GRACE_MS: u64 = 5 * 60 * 1000;
+
+/// Whether an event starting at `start_ms` is due a reminder at `now_ms`.
+pub fn reminder_due(start_ms: u64, now_ms: u64) -> bool {
+    start_ms <= now_ms.saturating_add(REMINDER_LEAD_MS)
+        && start_ms.saturating_add(REMINDER_GRACE_MS) > now_ms
+}
+
+/// "starting now", "in 7 min" or "5 min ago" for the reminder text.
+pub fn starts_in(start_ms: u64, now_ms: u64) -> String {
+    if start_ms >= now_ms {
+        let mins = (start_ms - now_ms).div_ceil(60_000);
+        if mins == 0 {
+            "starting now".into()
+        } else {
+            format!("in {mins} min")
+        }
+    } else {
+        let mins = (now_ms - start_ms) / 60_000;
+        if mins == 0 {
+            "starting now".into()
+        } else {
+            format!("started {mins} min ago")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,6 +336,20 @@ mod tests {
         let ms = parse_local("2026-10-21", "14:30").unwrap();
         assert_eq!(split_local(ms), Some(("2026-10-21".into(), "14:30".into())));
         assert!(format_start(ms).ends_with("14:30"));
+    }
+
+    #[test]
+    fn reminders_fire_in_the_lead_window_and_shortly_after_the_start() {
+        let now = 1_000_000_000u64;
+        let min = 60_000;
+        assert!(!reminder_due(now + 11 * min, now), "too early");
+        assert!(reminder_due(now + 10 * min, now));
+        assert!(reminder_due(now, now));
+        assert!(reminder_due(now - 4 * min, now), "just started");
+        assert!(!reminder_due(now - 6 * min, now), "long past");
+        assert_eq!(starts_in(now + 7 * min - 1, now), "in 7 min");
+        assert_eq!(starts_in(now, now), "starting now");
+        assert_eq!(starts_in(now - 3 * min, now), "started 3 min ago");
     }
 
     #[test]

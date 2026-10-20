@@ -315,3 +315,8 @@ Everything feasible without a real desktop panel, a camera, or a Windows machine
 - Calendar window: "Add event…" creates an entry for the user alone (title, local date/time, details); personal entries (`local:<hex>` IDs, `PERSONAL_PREFIX`) also get "Edit…"; Remove works for all entries. Stored in `calendar_entries` via `Database::save_personal_entry`; they are never sent to Matrix and are not synced across installations.
 - The new/edit form is now one shared function, `calendar_window::event_form`, also used by the conversation's invitation dialog.
 - Verified: unit test (create, change, remove) and a GUI run (add, edit; the Remove button predates this). Full suite: 72 unit + 4 bin + 26 integration pass, clippy clean.
+
+## Session 18 addendum: calendar reminders
+- `src/reminders.rs`: every 30 s (started after sign-in) the app checks `calendar_entries()` and sends one desktop notification per event (and per start time, so a rescheduled event reminds again) from 10 minutes before until 5 minutes after the start; tentative and accepted events both count, declined/cancelled ones do not. Pure logic is `calendar::reminder_due` / `starts_in` (unit tested).
+- Verified in a live run: three seeded events, only the one starting in ~8 minutes produced a notification ("📅 Soon meeting — in 5 min", seen with dbus-monitor on org.freedesktop.Notifications), exactly once over several further checks; the far-future and long-past events produced none.
+- Not done: configurable lead time, reminders surviving an app restart without repeating (the "already reminded" set is in memory), recurrence, sync across installations.

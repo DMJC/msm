@@ -15,6 +15,7 @@
 
 mod app;
 mod idle;
+mod reminders;
 mod tray;
 mod ui;
 
