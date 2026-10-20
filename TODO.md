@@ -16,7 +16,7 @@
 - [x] Account-data read/write with merge, verified across two installations vs Synapse
 - [x] Contact list UI, nickname editing UI using resolver (launch-verified; interactions not exercised)
 - [x] Ignored-user block/unblock (contact context menu; account-wide m.ignored_user_list; verified vs Synapse + GUI; Security → "Blocked users…" lists, unblocks and blocks by ID)
-- [x] (done, see Session 17 calendar addendum; organiser edit and cancel added in Session 18 (library + integration verified, buttons not GUI-tested); no recurring events) Create a calendar where users can send each other event invites but a user must tentatively accept an invite for it to be added to their calendar. They can RSVP to an invite.
+- [x] (done, see Session 17 calendar addendum; organiser edit and cancel added in Session 18 (library + integration verified, buttons verified in the GUI on the organiser side); no recurring events) Create a calendar where users can send each other event invites but a user must tentatively accept an invite for it to be added to their calendar. They can RSVP to an invite.
 ## Phase 5+
 - [x] DM discovery (m.direct), messaging, conversation UI, typing (verified vs Synapse and in the GUI; text, replies, edits, reactions, redactions also vs Element Web)
 - [x] Group rooms/invites: list, create, invite, accept/decline, leave, room windows (verified vs Synapse + GUI)
@@ -44,5 +44,6 @@
 - [ ] Hide-to-tray on window close verified by a real click
 - [x] Debian .deb: `cargo deb` metadata + scripts/build-packages.sh (built and inspected locally; extracted binary starts); CI workflow .github/workflows/packages.yml ran green on the v0.1.0 tag (GitHub Actions, ubuntu-24.04)
 - [x] RPM: `cargo generate-rpm` metadata, built and its file/dependency list inspected; not installed on an RPM-based system
+- [ ] AppImage Package
 - [ ] Microsoft Windows compatible client
 - [ ] Windows arm/x86_64 .exe automated builds.
