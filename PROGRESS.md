@@ -287,3 +287,7 @@ Everything feasible without a real desktop panel, a camera, or a Windows machine
 - `Cargo.toml` has `[package.metadata.deb]` and `[package.metadata.generate-rpm]`; `scripts/build-packages.sh` builds both into `target/packages/` (needs `cargo install cargo-deb cargo-generate-rpm`). Verified: both files build; `dpkg-deb -I/-c` shows the right control data, auto-detected GTK/cairo/glib dependencies, binary, desktop entry, icon, README, copyright; `rpm -qpl/-qpR` lists the same files and requires gtk3; the extracted .deb binary starts under Xephyr.
 - Not verified: actually installing either package (needs root / an rpm-based distro), the GitHub Actions workflow (no remote configured, never run), the rpm's runtime dependency names on Fedora.
 - Windows client/builds remain untouched.
+
+## Session 17 addendum: GitHub
+- Remote `origin` = https://github.com/DMJC/msm (default branch `main`; local `master` tracks it). Pushed with the GitHub initial LICENSE commit merged in. Tag `v0.1.0` pushed; the `packages` workflow (run 39393512006) succeeded on all steps: dependencies, `cargo test --lib`, `scripts/build-packages.sh`, artifact upload (`linux-packages`, the .deb and .rpm).
+- Still unverified: installing those packages on a clean Debian/Fedora system.

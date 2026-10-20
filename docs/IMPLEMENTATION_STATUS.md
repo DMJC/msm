@@ -19,4 +19,4 @@ Verified means exercised against a local Synapse (integration test) and/or in th
 | Calendar invitations with Tentative/Accept/Decline and a personal calendar | Verified (two instances in the GUI; integration test over an encrypted room); no recurrence, edit or cancel |
 | QR verification | Not implemented |
 | Audio/video calls and playback | Not implemented |
-| Packaging | .deb and .rpm build locally via scripts/build-packages.sh (not installed on target distros; CI workflow untested); Windows not started |
+| Packaging | .deb and .rpm build locally via scripts/build-packages.sh (not installed on target distros; the CI workflow ran green on tag v0.1.0); Windows not started |

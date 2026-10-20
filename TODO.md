@@ -41,7 +41,7 @@
 - [x] Native Wayland (GTK3), StatusNotifierItem tray with status menu
 - [ ] Verify taskbar icon via installed .desktop on the user's panel
 - [ ] Hide-to-tray on window close verified by a real click
-- [x] Debian .deb: `cargo deb` metadata + scripts/build-packages.sh (built and inspected locally; extracted binary starts); CI workflow .github/workflows/packages.yml written but never run (no remote)
+- [x] Debian .deb: `cargo deb` metadata + scripts/build-packages.sh (built and inspected locally; extracted binary starts); CI workflow .github/workflows/packages.yml ran green on the v0.1.0 tag (GitHub Actions, ubuntu-24.04)
 - [x] RPM: `cargo generate-rpm` metadata, built and its file/dependency list inspected; not installed on an RPM-based system
 - [ ] Microsoft Windows compatible client
 - [ ] Windows arm/x86_64 .exe automated builds.
