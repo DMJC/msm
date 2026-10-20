@@ -200,18 +200,21 @@ UI is still a placeholder window.
 - Verification needs both sides to already know each other's keys (e.g. a shared room) and the peer to have accepted the DM. The green ✔ states are not GUI-verified.
 - The verification-request message in the DM counts as an unread message. This comes from the SDK's client-side unread count (any `m.room.message` from another user counts) and the server's count; not fixed.
 - QR-code verification and verifying with a recovery key from a new device UI are not implemented.
-- Search covers only messages already loaded (no server-side search); replies to unloaded messages show "an earlier message"; jump-to-original works only for loaded messages.
+- Search filters loaded messages as you type; Enter pages back through up to 30 pages of history (client-side, so encrypted rooms work); replies to unloaded messages show "an earlier message"; jump-to-original works only for loaded messages.
 - Other users' avatar changes are now noticed live (Session 17: member-event watcher drops the cached avatar; integration test only, not seen in the GUI);  no avatar zoom/preview.
 - Image previews decode untrusted data with gdk-pixbuf (size-limited, failures ignored); "Open" hands files to the default application, as other clients do.
-- No upload progress / cancel, no thumbnails sent with images, no audio/video playback (they appear as files).
+- Upload progress/cancel exists (library-verified); no download progress (the SDK offers none), no thumbnails sent with images, no audio/video playback (they appear as files).
 - Attachments verified against Synapse and this client only (no Element).
 - SAS verification is implemented and tested between two msm clients (integration tests); the green ✔ on our own cross-signed device was seen in the GUI, but ✔ on other people's messages/devices has not been.
-- Not implemented: join rules, resetting cross-signing identity, recovery-key reset when this device lacks the secrets.
+- Not implemented: recovery-key reset when this device lacks the secrets (identity reset covers that case), QR verification, in-app audio/video.
 - The three-account GUI acceptance scenario has not been run end to end; hide-to-tray via a real close click and the installed .desktop icon are unverified on the user's panel.
 - Contact cache assumes a single account.
 
 ## Exact next task
-1. Optional: three-account GUI run; check that msm's GTK UI shows the ✔ for a user verified this way; Element's presence and avatar inside msm.
+1. Run the three-account GUI acceptance scenario (MASTER_PROMPT §19) end to end under Xephyr.
+2. Verify on a real panel: hide-to-tray via a real close click and the .desktop icon (cannot be done headlessly).
+3. Optional: Element's presence/avatar inside msm; QR verification; in-app audio/video; download progress.
+(See the Session 17 addenda below for what was added after this section was first written.)
 
 ## Session 17 addendum: invite fix
 - Full suite re-run found `invite_user` failing ("device is not verified") once the invitee had a cross-signing identity (accounts used in the Element SAS runs). Cause: matrix-sdk shares room history before inviting and aborts if this device is not cross-signed. `rooms::invite_user` now falls back to a plain invite request in that case.
