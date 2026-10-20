@@ -86,6 +86,13 @@ pub fn open(app: &Rc<App>) {
         });
     }
 
+    let blocked = gtk::Button::with_label("Blocked users…");
+    area.pack_start(&blocked, false, false, 0);
+    {
+        let app = app.clone();
+        blocked.connect_clicked(move |_| crate::ui::blocked_dialog::open(&app));
+    }
+
     let reload = {
         let (client, summary, devices) = (client.clone(), summary.clone(), devices.clone());
         let (setup, enter) = (setup.clone(), enter.clone());

@@ -15,7 +15,7 @@
 - [x] Contact model, resolver, manager, groups, LWW merge, SQLite cache (unit-tested)
 - [x] Account-data read/write with merge, verified across two installations vs Synapse
 - [x] Contact list UI, nickname editing UI using resolver (launch-verified; interactions not exercised)
-- [x] Ignored-user block/unblock (contact context menu; account-wide m.ignored_user_list; verified vs Synapse + GUI; no UI to unblock a non-contact)
+- [x] Ignored-user block/unblock (contact context menu; account-wide m.ignored_user_list; verified vs Synapse + GUI; Security → "Blocked users…" lists, unblocks and blocks by ID)
 - [ ] Create a calendar where users can send each other event invites but a user must tentatively accept an invite for it to be added to their calendar. They can RSVP to an invite.
 ## Phase 5+
 - [x] DM discovery (m.direct), messaging, conversation UI, typing (verified vs Synapse and in the GUI; text, replies, edits, reactions, redactions also vs Element Web)

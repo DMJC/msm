@@ -233,3 +233,6 @@ UI is still a placeholder window.
 - `matrix::ignore` (block/unblock/blocked) edits the server's `m.ignored_user_list` (the SDK's own `ignore_user`/`unignore_user` edit the local copy and silently no-op/clobber if sync hasn't echoed a recent change). Contact menu has "Block user"/"Unblock user"; blocked contacts show "(blocked)". `App::refresh_blocked` runs each sync.
 - Verified: new integration test (invalid/self rejected, block/list/unblock, visible from a second session) and live GTK (Sandy → "(blocked)" and menu flips to Unblock; unblocked again). Full suite: 59 unit + 4 bin + 21 integration pass, clippy clean.
 - Not done: a blocked non-contact can't be unblocked from the UI; the test must not block a real test account (parallel tests would lose its messages).
+
+## Session 17 addendum: blocked-users dialog
+- Security → "Blocked users…" (`ui/blocked_dialog.rs`) lists the ignore list with Unblock buttons and blocks by Matrix ID. Verified live in the GTK GUI: block `@stranger:localhost` (non-contact) → listed → Unblock → "Nobody is blocked." Closes the previous known gap. Clippy clean; the library calls are covered by the existing integration test.

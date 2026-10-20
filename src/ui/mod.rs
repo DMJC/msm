@@ -14,6 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 pub mod avatar;
+pub mod blocked_dialog;
 pub mod conversation_window;
 pub mod login_window;
 pub mod main_window;
