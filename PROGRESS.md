@@ -211,10 +211,11 @@ UI is still a placeholder window.
 - Contact cache assumes a single account.
 
 ## Exact next task
-1. (Done in part: see the acceptance addendum.) Re-run it with Element in the same session and a restart of one installation.
-2. Verify on a real panel: hide-to-tray via a real close click and the .desktop icon (cannot be done headlessly).
-3. Optional: Element's presence/avatar inside msm; QR verification; in-app audio/video; download progress.
-(See the Session 17 addenda below for what was added after this section was first written.)
+Everything feasible without a real desktop panel, a camera, or a Windows machine is done and verified (see the Session 17 addenda). What is left needs something this environment lacks:
+1. On a real Wayland/X11 desktop with a tray: confirm hide-to-tray on a real close click and that the installed .desktop icon shows on the panel (TODO.md Platform section).
+2. Install the built .deb/.rpm (`scripts/build-packages.sh`) on a clean Debian/Fedora system; run the CI workflow once a remote exists.
+3. Optional features: QR verification (needs a camera/scanner), in-app audio/video playback, voice/video calls, download progress, Windows build, calendar extras (recurrence, edit/cancel, sync across installations).
+4. Re-run the three-account scenario with Element in the same session if desired.
 
 ## Session 17 addendum: invite fix
 - Full suite re-run found `invite_user` failing ("device is not verified") once the invitee had a cross-signing identity (accounts used in the Element SAS runs). Cause: matrix-sdk shares room history before inviting and aborts if this device is not cross-signed. `rooms::invite_user` now falls back to a plain invite request in that case.
