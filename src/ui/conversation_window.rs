@@ -34,6 +34,8 @@ use msm::matrix::rooms;
 use crate::app::{App, now_ms, spawn_async};
 
 const PAGE: u16 = 30;
+/// Most history pages one search scan loads (older messages are fetched on demand).
+const SEARCH_PAGES: u32 = 30;
 const QUICK_REACTIONS: [&str; 6] = ["👍", "❤️", "😂", "🎉", "😮", "😢"];
 const EMOJI_PICKER: [&str; 32] = [
     "😀", "😃", "😄", "😁", "😆", "😅", "😂", "🙂", "😉", "😊", "😍", "😘", "😎", "🤔", "😐", "😢",
@@ -72,6 +74,8 @@ pub struct ConversationWindow {
     search_row: gtk::Box,
     search: gtk::SearchEntry,
     search_count: gtk::Label,
+    /// Bumped on every query change/activation so a stale history scan stops.
+    search_gen: std::cell::Cell<u32>,
 }
 
 pub fn open(app: &Rc<App>, room: Room, peer: Option<&str>) {
@@ -125,9 +129,11 @@ impl ConversationWindow {
         }
 
         let search = gtk::SearchEntry::new();
-        search.set_placeholder_text(Some("Search loaded messages"));
+        search.set_placeholder_text(Some("Search messages (Enter: also search older history)"));
         let search_count = gtk::Label::new(None);
         search_count.style_context().add_class("dim-label");
+        search_count.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        search_count.set_max_width_chars(28);
         let search_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         search_row.pack_start(&search, true, true, 0);
         search_row.pack_start(&search_count, false, false, 0);
@@ -225,6 +231,7 @@ impl ConversationWindow {
             search_row,
             search,
             search_count,
+            search_gen: std::cell::Cell::new(0),
         });
 
         let c = cw.clone();
@@ -232,7 +239,15 @@ impl ConversationWindow {
         let c = cw.clone();
         search_btn.connect_clicked(move |_| c.toggle_search());
         let c = cw.clone();
-        cw.search.connect_search_changed(move |_| c.redraw(false));
+        cw.search.connect_search_changed(move |_| {
+            c.search_gen.set(c.search_gen.get() + 1);
+            c.redraw(false);
+        });
+        let c = cw.clone();
+        cw.search.connect_activate(move |_| {
+            c.search_gen.set(c.search_gen.get() + 1);
+            c.search_older(c.search_gen.get(), SEARCH_PAGES);
+        });
         let c = cw.clone();
         cw.window.connect_key_press_event(move |_, e| {
             if e.state().contains(gdk::ModifierType::CONTROL_MASK)
@@ -470,6 +485,66 @@ impl ConversationWindow {
         if token.is_some() {
             self.fetch(token);
         }
+    }
+
+    /// Load older pages while a query is active so it covers more than what is
+    /// on screen; stops at the start of the room, the page cap, or a new query.
+    fn search_older(self: &Rc<Self>, generation: u32, pages_left: u32) {
+        if self.search_gen.get() != generation || self.search.text().trim().is_empty() {
+            return;
+        }
+        let Some(token) = self.older.borrow().clone() else {
+            self.note_search_end("reached the start of the conversation");
+            return;
+        };
+        if pages_left == 0 {
+            self.note_search_end("stopped; press Enter to search further back");
+            return;
+        }
+        self.search_count.set_text(&format!(
+            "{} found · searching older…",
+            self.search_matches()
+        ));
+        let (room, this) = (self.room.clone(), self.clone());
+        spawn_async(
+            async move {
+                rooms::load_history(&room, Some(&token), PAGE)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            move |res| {
+                if this.search_gen.get() != generation {
+                    return;
+                }
+                match res {
+                    Ok(h) => {
+                        for ev in h.events {
+                            this.conv.borrow_mut().apply(ev);
+                        }
+                        this.older_button.set_visible(h.older_token.is_some());
+                        *this.older.borrow_mut() = h.older_token;
+                        this.redraw(false);
+                        this.search_older(generation, pages_left - 1);
+                    }
+                    Err(e) => this.note_search_end(&format!("history failed: {e}")),
+                }
+            },
+        );
+    }
+
+    fn search_matches(&self) -> usize {
+        let query = self.search.text().to_string();
+        self.conv
+            .borrow()
+            .messages()
+            .iter()
+            .filter(|m| m.matches(&query))
+            .count()
+    }
+
+    fn note_search_end(&self, why: &str) {
+        self.search_count
+            .set_text(&format!("{} found · {why}", self.search_matches()));
     }
 
     fn fetch(self: &Rc<Self>, from: Option<String>) {

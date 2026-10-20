@@ -248,3 +248,7 @@ UI is still a placeholder window.
 - `media::send_file_with(room, path, Transfer{progress, cancel})` (new dep `eyeball` for the SDK's progress observable). Conversation window shows "Uploading name… N%" with a Cancel button, refuses a second upload while one runs.
 - Verified: integration test (progress reported; pre-signalled cancel → `Cancelled` and no message posted); full suite 59+4+21 pass, clippy clean. Not verified: the GUI Cancel click and visible percentage (local uploads finish instantly). Cancelling drops the request; if the media upload had already finished but the event not yet sent, an orphaned media file may remain on the server.
 - Download progress/cancel not done.
+
+## Session 17 addendum: search older history
+- Typing in the conversation search still filters loaded messages; pressing Enter now pages backwards (up to 30 pages of 30) until the start of the room, showing "N found · searching older…" / "reached the start" / "stopped; press Enter to search further back". A new query cancels a running scan.
+- Verified live in the GTK window: 80-message room, keyword only in message 3 → 0 found while typing, 1 found after Enter. Works on decrypted client-side history, so it also covers encrypted rooms. No automated test (UI-only logic). The ellipsized status label was added after the screenshot and not re-checked visually.
