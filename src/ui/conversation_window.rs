@@ -192,6 +192,9 @@ impl ConversationWindow {
         let side = gtk::Box::new(gtk::Orientation::Vertical, 4);
         side.pack_start(&emoji_btn, false, false, 0);
         side.pack_start(&attach_btn, false, false, 0);
+        let calendar_btn = gtk::Button::with_label("📅");
+        calendar_btn.set_tooltip_text(Some("Send a calendar invitation"));
+        side.pack_start(&calendar_btn, false, false, 0);
         side.pack_start(&send, false, false, 0);
         row.pack_start(&side, false, false, 0);
         root.pack_start(&row, false, false, 0);
@@ -323,6 +326,8 @@ impl ConversationWindow {
                 let _ = tx.try_send(());
             }
         });
+        let c = cw.clone();
+        calendar_btn.connect_clicked(move |_| c.calendar_invite_dialog());
         let c = cw.clone();
         attach_btn.connect_clicked(move |_| c.choose_and_send_file());
         let c = cw.clone();
@@ -935,6 +940,11 @@ impl ConversationWindow {
             outer.pack_start(&click, false, false, 0);
         }
         outer.pack_start(&row, false, false, 0);
+        if let (Some(entry), false) = (&m.calendar, m.redacted)
+            && let msm::calendar::Entry::Invite(inv) = &**entry
+        {
+            outer.pack_start(&self.invite_card(m, inv, m.sender == me), false, false, 0);
+        }
         if let (Some(att), false) = (&m.attachment, m.redacted)
             && att.kind == AttachmentKind::Image
         {
@@ -945,6 +955,191 @@ impl ConversationWindow {
             outer.pack_start(&chips, false, false, 0);
         }
         outer.upcast()
+    }
+
+    /// The invitation's time and, for the invitee, Tentative / Accept / Decline.
+    fn invite_card(
+        self: &Rc<Self>,
+        m: &ChatMessage,
+        inv: &msm::calendar::Invite,
+        mine: bool,
+    ) -> gtk::Widget {
+        use msm::calendar::{Response, format_start};
+        let card = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        card.set_margin_start(16);
+        let current = self.app.db.calendar_response(&m.id).ok().flatten();
+        let status = if mine {
+            "Your invitation".to_owned()
+        } else {
+            match current {
+                Some(r) => format!(
+                    "You answered: {}",
+                    r.label()
+                        .replace("Accept", "Accepted")
+                        .replace("Decline", "Declined")
+                ),
+                None => "Not on your calendar until you answer".to_owned(),
+            }
+        };
+        let info = gtk::Label::new(None);
+        info.set_xalign(0.0);
+        info.set_line_wrap(true);
+        info.set_markup(&format!(
+            "<b>{}</b> · {}\n<small>{}</small>",
+            glib::markup_escape_text(&inv.title),
+            glib::markup_escape_text(&format_start(inv.start_ms)),
+            glib::markup_escape_text(&status)
+        ));
+        card.pack_start(&info, true, true, 0);
+        if !mine && m.id.starts_with('$') {
+            for r in Response::ALL {
+                let b = gtk::Button::with_label(r.label());
+                b.set_sensitive(current != Some(r));
+                let (this, id, inv, sender) =
+                    (self.clone(), m.id.clone(), inv.clone(), m.sender.clone());
+                b.connect_clicked(move |_| this.answer_invite(&id, &sender, &inv, r));
+                card.pack_start(&b, false, false, 0);
+            }
+        }
+        card.upcast()
+    }
+
+    fn answer_invite(
+        self: &Rc<Self>,
+        event_id: &str,
+        sender: &str,
+        inv: &msm::calendar::Invite,
+        response: msm::calendar::Response,
+    ) {
+        let entry = msm::storage::database::CalendarEntry {
+            event_id: event_id.to_owned(),
+            room_id: self.room.room_id().to_string(),
+            sender: sender.to_owned(),
+            title: inv.title.clone(),
+            start_ms: inv.start_ms,
+            description: inv.description.clone(),
+            response,
+        };
+        if let Err(e) = self.app.db.save_calendar_entry(&entry) {
+            self.typing
+                .set_text(&format!("Could not save to your calendar: {e}"));
+            return;
+        }
+        self.redraw(false);
+        let (room, this) = (self.room.clone(), self.clone());
+        let (title, id) = (inv.title.clone(), event_id.to_owned());
+        spawn_async(
+            async move {
+                rooms::send_rsvp(&room, &title, &id, response)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            move |res| match res {
+                Ok(()) => this.typing.set_text(""),
+                Err(e) => this
+                    .typing
+                    .set_text(&format!("Saved locally, but the answer was not sent: {e}")),
+            },
+        );
+    }
+
+    fn calendar_invite_dialog(self: &Rc<Self>) {
+        let d = gtk::Dialog::with_buttons(
+            Some("Calendar invitation"),
+            Some(&self.window),
+            gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
+            &[
+                ("Cancel", gtk::ResponseType::Cancel),
+                ("Send", gtk::ResponseType::Accept),
+            ],
+        );
+        d.set_default_response(gtk::ResponseType::Accept);
+        let area = d.content_area();
+        area.set_spacing(6);
+        area.set_margin(12);
+        let title = gtk::Entry::new();
+        title.set_placeholder_text(Some("Title"));
+        title.set_activates_default(true);
+        let today = glib::DateTime::now_local()
+            .ok()
+            .and_then(|t| t.format("%Y-%m-%d").ok())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        let date = gtk::Entry::new();
+        date.set_text(&today);
+        date.set_tooltip_text(Some("Date, YYYY-MM-DD (your local time)"));
+        let time = gtk::Entry::new();
+        time.set_text("12:00");
+        time.set_tooltip_text(Some("Time, HH:MM (24-hour, your local time)"));
+        let when = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        when.pack_start(&date, true, true, 0);
+        when.pack_start(&time, true, true, 0);
+        let desc = gtk::Entry::new();
+        desc.set_placeholder_text(Some("Details (optional)"));
+        let error = gtk::Label::new(None);
+        error.set_xalign(0.0);
+        for w in [
+            title.upcast_ref::<gtk::Widget>(),
+            when.upcast_ref(),
+            desc.upcast_ref(),
+            error.upcast_ref(),
+        ] {
+            area.pack_start(w, false, false, 0);
+        }
+        d.show_all();
+        let invite = loop {
+            if d.run() != gtk::ResponseType::Accept {
+                break None;
+            }
+            let t = title.text().trim().to_owned();
+            if t.is_empty() {
+                error.set_text("Enter a title.");
+                continue;
+            }
+            let Some(start_ms) = msm::calendar::parse_local(&date.text(), &time.text()) else {
+                error.set_text("Use the date as YYYY-MM-DD and the time as HH:MM.");
+                continue;
+            };
+            break Some(msm::calendar::Invite {
+                title: t,
+                start_ms,
+                description: desc.text().trim().to_owned(),
+            });
+        };
+        d.close();
+        let Some(invite) = invite else { return };
+        let (room, this) = (self.room.clone(), self.clone());
+        let inv = invite.clone();
+        self.typing.set_text("Sending invitation…");
+        spawn_async(
+            async move {
+                rooms::send_invite(&room, &inv)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            move |res| match res {
+                Ok(event_id) => {
+                    this.typing.set_text("");
+                    // The organiser's own event goes straight onto their calendar.
+                    let me = this.me();
+                    let _ =
+                        this.app
+                            .db
+                            .save_calendar_entry(&msm::storage::database::CalendarEntry {
+                                event_id,
+                                room_id: this.room.room_id().to_string(),
+                                sender: me,
+                                title: invite.title,
+                                start_ms: invite.start_ms,
+                                description: invite.description,
+                                response: msm::calendar::Response::Accepted,
+                            });
+                }
+                Err(e) => this
+                    .typing
+                    .set_text(&format!("Could not send the invitation: {e}")),
+            },
+        );
     }
 
     fn extend_menu(self: &Rc<Self>, menu: &gtk::Menu, m: &ChatMessage, mine: bool) {

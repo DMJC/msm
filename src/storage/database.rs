@@ -20,7 +20,9 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
+
+use crate::calendar::Response;
 use thiserror::Error;
 
 use super::migrations::MIGRATIONS;
@@ -33,6 +35,18 @@ pub enum DbError {
     Sqlite(#[from] rusqlite::Error),
     #[error("database is from a newer version (schema {found}, supported {supported})")]
     TooNew { found: usize, supported: usize },
+}
+
+/// An invitation we have answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CalendarEntry {
+    pub event_id: String,
+    pub room_id: String,
+    pub sender: String,
+    pub title: String,
+    pub start_ms: u64,
+    pub description: String,
+    pub response: Response,
 }
 
 pub struct Database {
@@ -146,6 +160,69 @@ impl Database {
         Ok(doc)
     }
 
+    /// Record (or change) our answer to an invitation.
+    pub fn save_calendar_entry(&self, e: &CalendarEntry) -> Result<(), DbError> {
+        self.conn.lock().expect("db lock").execute(
+            "INSERT INTO calendar_entries (event_id, room_id, sender, title, start_ms, description, response)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(event_id) DO UPDATE SET response = excluded.response",
+            params![
+                e.event_id,
+                e.room_id,
+                e.sender,
+                e.title,
+                e.start_ms as i64,
+                e.description,
+                e.response.key()
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn calendar_response(&self, event_id: &str) -> Result<Option<Response>, DbError> {
+        let key: Option<String> = self
+            .conn
+            .lock()
+            .expect("db lock")
+            .query_row(
+                "SELECT response FROM calendar_entries WHERE event_id = ?1",
+                [event_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(key.and_then(|k| Response::from_key(&k)))
+    }
+
+    /// Entries on the calendar (not declined), soonest first.
+    pub fn calendar_entries(&self) -> Result<Vec<CalendarEntry>, DbError> {
+        let conn = self.conn.lock().expect("db lock");
+        let mut stmt = conn.prepare(
+            "SELECT event_id, room_id, sender, title, start_ms, description, response
+             FROM calendar_entries WHERE response != 'declined' ORDER BY start_ms, event_id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(CalendarEntry {
+                event_id: r.get(0)?,
+                room_id: r.get(1)?,
+                sender: r.get(2)?,
+                title: r.get(3)?,
+                start_ms: r.get::<_, i64>(4)? as u64,
+                description: r.get(5)?,
+                response: Response::from_key(&r.get::<_, String>(6)?)
+                    .unwrap_or(Response::Tentative),
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    pub fn remove_calendar_entry(&self, event_id: &str) -> Result<(), DbError> {
+        self.conn.lock().expect("db lock").execute(
+            "DELETE FROM calendar_entries WHERE event_id = ?1",
+            [event_id],
+        )?;
+        Ok(())
+    }
+
     pub fn set_setting(&self, key: &str, value: &str) -> Result<(), DbError> {
         self.lock().execute(
             "INSERT INTO application_settings (key, value) VALUES (?1, ?2)
@@ -211,5 +288,48 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY); INSERT INTO schema_migrations VALUES (99);").unwrap();
         assert!(matches!(Database::init(conn), Err(DbError::TooNew { .. })));
+    }
+
+    #[test]
+    fn calendar_entries_keep_the_latest_answer_and_hide_declined() {
+        use crate::calendar::Response;
+        let db = Database::open_in_memory().unwrap();
+        let mk = |id: &str, start: u64, r| CalendarEntry {
+            event_id: id.into(),
+            room_id: "!r:x".into(),
+            sender: "@a:x".into(),
+            title: format!("event {id}"),
+            start_ms: start,
+            description: String::new(),
+            response: r,
+        };
+        db.save_calendar_entry(&mk("$late", 2000, Response::Accepted))
+            .unwrap();
+        db.save_calendar_entry(&mk("$soon", 1000, Response::Tentative))
+            .unwrap();
+        let ids: Vec<_> = db
+            .calendar_entries()
+            .unwrap()
+            .into_iter()
+            .map(|e| e.event_id)
+            .collect();
+        assert_eq!(ids, ["$soon", "$late"]);
+        // Changing our mind updates the answer; declining takes it off the calendar.
+        db.save_calendar_entry(&mk("$soon", 1000, Response::Accepted))
+            .unwrap();
+        assert_eq!(
+            db.calendar_response("$soon").unwrap(),
+            Some(Response::Accepted)
+        );
+        db.save_calendar_entry(&mk("$late", 2000, Response::Declined))
+            .unwrap();
+        assert_eq!(db.calendar_entries().unwrap().len(), 1);
+        assert_eq!(
+            db.calendar_response("$late").unwrap(),
+            Some(Response::Declined)
+        );
+        assert_eq!(db.calendar_response("$none").unwrap(), None);
+        db.remove_calendar_entry("$soon").unwrap();
+        assert!(db.calendar_entries().unwrap().is_empty());
     }
 }

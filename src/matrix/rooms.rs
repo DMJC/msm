@@ -472,6 +472,34 @@ pub async fn send_text(
     Ok(r.response.event_id.to_string())
 }
 
+/// Send a calendar invitation into `room`; returns the event ID.
+pub async fn send_invite(
+    room: &Room,
+    invite: &crate::calendar::Invite,
+) -> Result<String, RoomError> {
+    let r = room
+        .send_raw("m.room.message", crate::calendar::invite_content(invite))
+        .await
+        .map_err(mx)?;
+    Ok(r.response.event_id.to_string())
+}
+
+/// Answer the invitation `event_id` (titled `title`) in `room`.
+pub async fn send_rsvp(
+    room: &Room,
+    title: &str,
+    event_id: &str,
+    response: crate::calendar::Response,
+) -> Result<(), RoomError> {
+    room.send_raw(
+        "m.room.message",
+        crate::calendar::rsvp_content(title, event_id, response),
+    )
+    .await
+    .map_err(mx)?;
+    Ok(())
+}
+
 /// Replace the text of one of our own messages (an `m.replace` edit).
 pub async fn send_edit(
     room: &Room,

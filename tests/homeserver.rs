@@ -1621,3 +1621,72 @@ async fn resetting_the_identity_replaces_cross_signing_keys_and_the_recovery_key
     assert!(st.cross_signing_ready, "{st:?}");
     assert_eq!(st.recovery, Recovery::Enabled);
 }
+
+#[tokio::test]
+async fn calendar_invitation_and_rsvp_cross_an_encrypted_room() {
+    use msm::calendar::{Entry, Invite, Response};
+    let Some(hs) = homeserver() else { return };
+    let alice = login_as(&hs, "alice", "cal-alice").await;
+    let bob = login_as(&hs, "bob", "cal-bob").await;
+    let room = rooms::create_group(
+        &alice,
+        &format!("Calendar {}", std::process::id()),
+        &["@bob:localhost".into()],
+    )
+    .await
+    .unwrap();
+    for _ in 0..10 {
+        sync_a_bit(&bob).await;
+        if !bob.invited_rooms().is_empty() {
+            break;
+        }
+    }
+    for r in bob.invited_rooms() {
+        r.join().await.unwrap();
+    }
+    sync_a_bit(&bob).await;
+    sync_a_bit(&alice).await;
+    let broom = bob.get_room(room.room_id()).expect("bob joined");
+    assert!(room.encryption_state().is_encrypted());
+
+    let invite = Invite {
+        title: "Lunch".into(),
+        start_ms: msm::calendar::parse_local("2030-05-06", "12:30").unwrap(),
+        description: "At the usual place".into(),
+    };
+    let invite_id = rooms::send_invite(&room, &invite).await.unwrap();
+    sync_a_bit(&bob).await;
+
+    // Bob reads the structured invitation; it also reads as plain text for other clients.
+    let conv = history_of(&broom).await;
+    let m = conv
+        .messages()
+        .iter()
+        .find(|m| m.id == invite_id)
+        .cloned()
+        .expect("invitation arrived");
+    assert_eq!(m.calendar.as_deref(), Some(&Entry::Invite(invite.clone())));
+    assert!(
+        m.body.contains("Lunch") && m.body.contains("12:30"),
+        "{}",
+        m.body
+    );
+
+    // Bob answers tentatively; Alice sees the answer, tied to the invitation.
+    rooms::send_rsvp(&broom, "Lunch", &invite_id, Response::Tentative)
+        .await
+        .unwrap();
+    sync_a_bit(&alice).await;
+    let conv = history_of(&room).await;
+    let answer = conv
+        .messages()
+        .iter()
+        .find_map(|m| match m.calendar.as_deref() {
+            Some(Entry::Rsvp { event_id, response }) if event_id == &invite_id => {
+                Some((m.sender.clone(), *response))
+            }
+            _ => None,
+        })
+        .expect("answer arrived");
+    assert_eq!(answer, ("@bob:localhost".to_owned(), Response::Tentative));
+}

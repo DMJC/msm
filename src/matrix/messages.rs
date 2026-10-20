@@ -130,6 +130,8 @@ pub struct ChatMessage {
     /// Event ID this message replies to (`m.in_reply_to`).
     pub reply_to: Option<String>,
     pub trust: Trust,
+    /// Structured calendar invitation/answer carried by this message, if any.
+    pub calendar: Option<Box<crate::calendar::Entry>>,
 }
 
 impl ChatMessage {
@@ -339,6 +341,7 @@ impl Conversation {
             attachment: None,
             reply_to: reply_to.map(str::to_owned),
             trust: Trust::Unencrypted,
+            calendar: None,
         });
     }
 
@@ -511,6 +514,12 @@ pub fn parse_event(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
                     _ => None,
                 },
                 trust: Trust::Unencrypted,
+                calendar: raw
+                    .get_field::<serde_json::Value>("content")
+                    .ok()
+                    .flatten()
+                    .and_then(|c| crate::calendar::parse(&c))
+                    .map(Box::new),
             }))
         }
         AnySyncMessageLikeEvent::RoomEncrypted(SyncMessageLikeEvent::Redacted(e)) => {
@@ -527,6 +536,7 @@ pub fn parse_event(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
                 attachment: None,
                 reply_to: None,
                 trust: Trust::Unencrypted,
+                calendar: None,
             }))
         }
         AnySyncMessageLikeEvent::RoomMessage(SyncMessageLikeEvent::Redacted(e)) => {
@@ -543,6 +553,7 @@ pub fn parse_event(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
                 attachment: None,
                 reply_to: None,
                 trust: Trust::Unencrypted,
+                calendar: None,
             }))
         }
         AnySyncMessageLikeEvent::RoomEncrypted(SyncMessageLikeEvent::Original(e)) => {
@@ -559,6 +570,7 @@ pub fn parse_event(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
                 attachment: None,
                 reply_to: None,
                 trust: Trust::Unencrypted,
+                calendar: None,
             }))
         }
         AnySyncMessageLikeEvent::Reaction(SyncMessageLikeEvent::Original(e)) => {
@@ -607,6 +619,7 @@ fn parse_redacted_fallback(raw: &Raw<AnySyncTimelineEvent>) -> Option<Parsed> {
         attachment: None,
         reply_to: None,
         trust: Trust::Unencrypted,
+        calendar: None,
     }))
 }
 
@@ -633,6 +646,7 @@ mod tests {
             attachment: None,
             reply_to: None,
             trust: Trust::Unencrypted,
+            calendar: None,
         }
     }
 
@@ -926,5 +940,43 @@ mod tests {
             Some(Parsed::Message(m)) => assert!(m.attachment.is_none()),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn calendar_invitations_and_answers_are_read_from_message_content() {
+        use crate::calendar::{Entry, Invite, Response, invite_content, rsvp_content};
+        let inv = Invite {
+            title: "Lunch".into(),
+            start_ms: 1_800_000_000_000,
+            description: String::new(),
+        };
+        let ev = |content| {
+            raw(json!({
+                "type": "m.room.message", "event_id": "$e", "sender": "@a:x",
+                "origin_server_ts": 5, "content": content
+            }))
+        };
+        let Some(Parsed::Message(m)) = parse_event(&ev(invite_content(&inv))) else {
+            panic!("message")
+        };
+        assert_eq!(m.calendar, Some(Box::new(Entry::Invite(inv))));
+        assert!(m.body.contains("Lunch"), "other clients see readable text");
+        let Some(Parsed::Message(m)) =
+            parse_event(&ev(rsvp_content("Lunch", "$i", Response::Tentative)))
+        else {
+            panic!("message")
+        };
+        assert_eq!(
+            m.calendar,
+            Some(Box::new(Entry::Rsvp {
+                event_id: "$i".into(),
+                response: Response::Tentative
+            }))
+        );
+        let Some(Parsed::Message(m)) = parse_event(&ev(json!({"msgtype":"m.text","body":"hi"})))
+        else {
+            panic!("message")
+        };
+        assert_eq!(m.calendar, None);
     }
 }

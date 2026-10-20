@@ -1,0 +1,238 @@
+// Copyright (C) 2026 James Carthew
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+//! Calendar invitations carried in ordinary Matrix room messages.
+//!
+//! An invitation is an `m.room.message` (`m.text`) whose body is a readable
+//! summary, so other clients just show text; msm also reads the structured
+//! `com.matrixmessenger.calendar.v1` field. An RSVP is another text message
+//! carrying the same field. An invitation only reaches the recipient's
+//! calendar once they answer Tentative or Accepted.
+
+use chrono::{Local, LocalResult, NaiveDate, NaiveTime, TimeZone};
+use serde_json::{Value, json};
+
+pub const KEY: &str = "com.matrixmessenger.calendar.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Invite {
+    pub title: String,
+    /// UTC milliseconds since the epoch.
+    pub start_ms: u64,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Response {
+    Tentative,
+    Accepted,
+    Declined,
+}
+
+impl Response {
+    pub const ALL: [Response; 3] = [Response::Tentative, Response::Accepted, Response::Declined];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Response::Tentative => "tentative",
+            Response::Accepted => "accepted",
+            Response::Declined => "declined",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|r| r.key() == k)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Response::Tentative => "Tentative",
+            Response::Accepted => "Accept",
+            Response::Declined => "Decline",
+        }
+    }
+
+    /// Whether the event belongs on the calendar after this answer.
+    pub fn on_calendar(self) -> bool {
+        self != Response::Declined
+    }
+}
+
+/// What a message's structured field says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Entry {
+    Invite(Invite),
+    Rsvp {
+        /// Event ID of the invitation being answered.
+        event_id: String,
+        response: Response,
+    },
+}
+
+/// Local date/time text → UTC ms. `date` is `YYYY-MM-DD`, `time` is `HH:MM`.
+pub fn parse_local(date: &str, time: &str) -> Option<u64> {
+    let d = NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d").ok()?;
+    let t = NaiveTime::parse_from_str(time.trim(), "%H:%M").ok()?;
+    match Local.from_local_datetime(&d.and_time(t)) {
+        LocalResult::Single(dt) | LocalResult::Ambiguous(dt, _) => {
+            u64::try_from(dt.timestamp_millis()).ok()
+        }
+        LocalResult::None => None,
+    }
+}
+
+/// UTC ms → "Wed 21 Oct 2026, 14:00" in the viewer's time zone.
+pub fn format_start(ms: u64) -> String {
+    match Local.timestamp_millis_opt(ms as i64) {
+        LocalResult::Single(dt) | LocalResult::Ambiguous(dt, _) => {
+            dt.format("%a %d %b %Y, %H:%M").to_string()
+        }
+        LocalResult::None => "unknown time".into(),
+    }
+}
+
+/// Message content for an invitation.
+pub fn invite_content(inv: &Invite) -> Value {
+    let mut body = format!(
+        "📅 Invitation: {} — {}",
+        inv.title,
+        format_start(inv.start_ms)
+    );
+    if !inv.description.trim().is_empty() {
+        body.push_str(&format!("\n{}", inv.description.trim()));
+    }
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        KEY: {
+            "kind": "invite",
+            "title": inv.title,
+            "start_ms": inv.start_ms,
+            "description": inv.description,
+        }
+    })
+}
+
+/// Message content for an answer to the invitation `event_id`.
+pub fn rsvp_content(title: &str, event_id: &str, response: Response) -> Value {
+    let verb = match response {
+        Response::Tentative => "tentatively accepted",
+        Response::Accepted => "accepted",
+        Response::Declined => "declined",
+    };
+    json!({
+        "msgtype": "m.text",
+        "body": format!("📅 I {verb}: {title}"),
+        KEY: { "kind": "rsvp", "event_id": event_id, "response": response.key() }
+    })
+}
+
+/// Read the structured field out of a message's `content`.
+pub fn parse(content: &Value) -> Option<Entry> {
+    let c = content.get(KEY)?;
+    match c.get("kind")?.as_str()? {
+        "invite" => {
+            let title = c.get("title")?.as_str()?.trim();
+            if title.is_empty() {
+                return None;
+            }
+            Some(Entry::Invite(Invite {
+                title: title.chars().take(200).collect(),
+                start_ms: c.get("start_ms")?.as_u64()?,
+                description: c
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .chars()
+                    .take(2000)
+                    .collect(),
+            }))
+        }
+        "rsvp" => Some(Entry::Rsvp {
+            event_id: c.get("event_id")?.as_str()?.to_owned(),
+            response: Response::from_key(c.get("response")?.as_str()?)?,
+        }),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn invite() -> Invite {
+        Invite {
+            title: "Lunch".into(),
+            start_ms: 1_800_000_000_000,
+            description: "At the usual place".into(),
+        }
+    }
+
+    #[test]
+    fn invite_round_trips_and_has_a_readable_body() {
+        let c = invite_content(&invite());
+        assert!(c["body"].as_str().unwrap().contains("Lunch"));
+        assert_eq!(c["msgtype"], "m.text");
+        assert_eq!(parse(&c), Some(Entry::Invite(invite())));
+    }
+
+    #[test]
+    fn rsvp_round_trips() {
+        for r in Response::ALL {
+            let c = rsvp_content("Lunch", "$abc", r);
+            assert_eq!(
+                parse(&c),
+                Some(Entry::Rsvp {
+                    event_id: "$abc".into(),
+                    response: r
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_or_foreign_content_is_ignored() {
+        assert_eq!(parse(&json!({"msgtype":"m.text","body":"hi"})), None);
+        assert_eq!(
+            parse(&json!({KEY: {"kind":"invite","title":"  ","start_ms":1}})),
+            None
+        );
+        assert_eq!(
+            parse(&json!({KEY: {"kind":"invite","title":"x","start_ms":"soon"}})),
+            None
+        );
+        assert_eq!(
+            parse(&json!({KEY: {"kind":"rsvp","event_id":"$a","response":"maybe"}})),
+            None
+        );
+        assert_eq!(parse(&json!({KEY: {"kind":"party"}})), None);
+    }
+
+    #[test]
+    fn local_time_parsing_is_strict_and_round_trips_through_formatting() {
+        assert!(parse_local("2026-13-01", "10:00").is_none());
+        assert!(parse_local("2026-10-21", "25:00").is_none());
+        assert!(parse_local("tomorrow", "10:00").is_none());
+        let ms = parse_local("2026-10-21", "14:30").unwrap();
+        assert!(format_start(ms).ends_with("14:30"));
+    }
+
+    #[test]
+    fn only_tentative_and_accepted_reach_the_calendar() {
+        assert!(Response::Tentative.on_calendar());
+        assert!(Response::Accepted.on_calendar());
+        assert!(!Response::Declined.on_calendar());
+    }
+}

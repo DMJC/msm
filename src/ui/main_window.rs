@@ -147,7 +147,8 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     let room = gtk::Button::with_label("New room");
     let logout = gtk::Button::with_label("Sign out");
     let security = gtk::Button::with_label("Security…");
-    for b in [&add, &group] {
+    let calendar = gtk::Button::with_label("Calendar");
+    for b in [&add, &group, &calendar] {
         bar.pack_start(b, true, true, 0);
     }
     let bar2 = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -157,6 +158,8 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     root.pack_start(&bar, false, false, 0);
     root.pack_start(&bar2, false, false, 0);
 
+    let a = app.clone();
+    calendar.connect_clicked(move |_| crate::ui::calendar_window::open(&a));
     let a = app.clone();
     security.connect_clicked(move |_| crate::ui::security_dialog::open(&a));
     let a = app.clone();

@@ -35,4 +35,14 @@ pub const MIGRATIONS: &[&str] = &[
      );",
     // 2: application-level friendship state
     "ALTER TABLE contacts ADD COLUMN friendship TEXT NOT NULL DEFAULT 'none';",
+    // 3: calendar entries the user answered (tentative/accepted/declined)
+    "CREATE TABLE calendar_entries (
+        event_id TEXT PRIMARY KEY,
+        room_id TEXT NOT NULL,
+        sender TEXT NOT NULL,
+        title TEXT NOT NULL,
+        start_ms INTEGER NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        response TEXT NOT NULL
+     );",
 ];
