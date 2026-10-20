@@ -236,3 +236,6 @@ UI is still a placeholder window.
 
 ## Session 17 addendum: blocked-users dialog
 - Security → "Blocked users…" (`ui/blocked_dialog.rs`) lists the ignore list with Unblock buttons and blocks by Matrix ID. Verified live in the GTK GUI: block `@stranger:localhost` (non-contact) → listed → Unblock → "Nobody is blocked." Closes the previous known gap. Clippy clean; the library calls are covered by the existing integration test.
+
+## Session 17 addendum: docs
+- Added docs/ARCHITECTURE, REQUIREMENTS, SECURITY, TESTING, IMPLEMENTATION_STATUS (written from the code and test records; no code change). Logging/XDG items were already implemented; explicit clean-shutdown handling is still open.
