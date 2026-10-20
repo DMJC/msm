@@ -207,11 +207,11 @@ UI is still a placeholder window.
 - Attachments verified against Synapse and this client only (no Element).
 - SAS verification is implemented and tested between two msm clients (integration tests); the green ✔ on our own cross-signed device was seen in the GUI, but ✔ on other people's messages/devices has not been.
 - Not implemented: recovery-key reset when this device lacks the secrets (identity reset covers that case), QR verification, in-app audio/video.
-- The three-account GUI acceptance scenario has not been run end to end; hide-to-tray via a real close click and the installed .desktop icon are unverified on the user's panel.
+- The three-account acceptance scenario was observed in the GUI for nicknames and group display (see the last Session 17 addendum), not with Element in the same run; hide-to-tray via a real close click and the installed .desktop icon are unverified on the user's panel.
 - Contact cache assumes a single account.
 
 ## Exact next task
-1. Run the three-account GUI acceptance scenario (MASTER_PROMPT §19) end to end under Xephyr.
+1. (Done in part: see the acceptance addendum.) Re-run it with Element in the same session and a restart of one installation.
 2. Verify on a real panel: hide-to-tray via a real close click and the .desktop icon (cannot be done headlessly).
 3. Optional: Element's presence/avatar inside msm; QR verification; in-app audio/video; download progress.
 (See the Session 17 addenda below for what was added after this section was first written.)
@@ -267,3 +267,9 @@ UI is still a placeholder window.
 - Security → "Reset cross-signing identity…" (`encryption::reset_identity`): confirm, password (UIA), new cross-signing keys; if recovery existed its key is replaced and shown. OAuth-based accounts get an error pointing at the provider's approval URL (not exercised).
 - Caveat: the SDK regenerates local keys before the server accepts them, so a wrong password leaves this device out of step until the reset is retried; the UI error says so only via the message, retry works (tested).
 - Verified: integration test on a fresh user (wrong password refused with server keys unchanged; reset changes the master key and returns a new recovery key; status stays ready/Enabled) and live GTK (confirm → password → new key differs from the old). Full suite 59+4+22 pass, clippy clean. Signed alice out of the GUI during this check (her session was wiped; test accounts still work).
+
+## Session 17 addendum: acceptance scenario in the GTK GUI
+- Ran two msm instances at once (alice on Xephyr :5, bob on :6), each in `dbus-run-session` with its own `XDG_DATA_HOME` (fresh installations). With no Secret Service on the private bus, the first login took about a minute to show the main window (oo7 waited for the secrets D-Bus service to time out); a normal desktop with a keyring is unaffected.
+- Server state: darkmage's public display name is "Darkmage"; alice's account data has nickname "James Carthew" for @darkmage:localhost, bob's has "DMJC".
+- Observed: alice's fresh install lists the contact as "James Carthew", bob's as "DMJC" (the nicknames arrived through account data, i.e. synchronised between installations with no local state). In the 3-member group "Acceptance Group" darkmage's message shows as "James Carthew" for alice and "DMJC" for bob. The profile endpoint still returns "Darkmage", so no profile change. Same MXID throughout.
+- Earlier evidence covers the rest: Element interop (messages, replies, encryption, SAS) and the nickname-sync integration test. Not re-done in this run: restarting the same installation and Element showing the group in the same session.
