@@ -255,3 +255,7 @@ UI is still a placeholder window.
 
 ## Session 17 addendum: custom power levels
 - Role menu gained "Custom level…" (0–100 prompt, validated); members at other levels show "(custom level)", ≥100 (including the room creator's effectively infinite level) "(admin)". Verified: integration test (level 25 round-trips) and live GTK (set Sandy to 25 → "(custom level)"). Note Synapse accepted a level above the creator's 100 in the test room, so "can't exceed your own level" is server-defined, not asserted.
+
+## Session 17 addendum: directory listing
+- Room settings checkbox "Show in the server's public room directory" (`rooms::set_listed`, `RoomSettings.listed`), enabled for those who may change join rules; the server decides (Synapse refuses unless `room_list_publication_rules` allows — the test script `scripts/test-homeserver.sh` now configures an allow rule, as Synapse otherwise returns 403 "Not allowed to publish room").
+- Verified: integration test (unlisted → listed → unlisted, read back from the server) and live GTK toggle. Not observed: the room appearing in `/publicRooms` — Synapse only lists published rooms that are also joinable by anyone, and the test room was invite-only.

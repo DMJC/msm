@@ -1404,6 +1404,22 @@ async fn kick_ban_unban_and_room_settings_respect_power_levels() {
             .is_err()
     );
 
+    // Directory listing: starts unlisted; the admin can publish and withdraw it.
+    assert_eq!(
+        rooms::room_settings(&room).await.unwrap().listed,
+        Some(false)
+    );
+    rooms::set_listed(&room, true).await.unwrap();
+    assert_eq!(
+        rooms::room_settings(&room).await.unwrap().listed,
+        Some(true)
+    );
+    rooms::set_listed(&room, false).await.unwrap();
+    assert_eq!(
+        rooms::room_settings(&room).await.unwrap().listed,
+        Some(false)
+    );
+
     // Name and topic changes reach the other members.
     assert!(rooms::set_room_name(&room, "  ").await.is_err());
     rooms::set_room_name(&room, "Renamed").await.unwrap();

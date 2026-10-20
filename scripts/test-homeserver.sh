@@ -14,6 +14,8 @@ if [ ! -f homeserver.yaml ]; then
 enable_registration: true
 enable_registration_without_verification: true
 suppress_key_server_warning: true
+room_list_publication_rules:
+  - {user_id: "*", alias: "*", room_id: "*", action: allow}
 rc_message: {per_second: 1000, burst_count: 1000}
 rc_registration: {per_second: 1000, burst_count: 1000}
 rc_login:

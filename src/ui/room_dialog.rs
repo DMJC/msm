@@ -38,6 +38,7 @@ struct Dialog {
     change_picture: gtk::Button,
     remove_picture: gtk::Button,
     join: gtk::ComboBoxText,
+    listed: gtk::CheckButton,
     /// Set while the combo is filled from the server so that doesn't count as an edit.
     loading_join: std::cell::Cell<bool>,
 }
@@ -71,6 +72,10 @@ pub fn open(app: &Rc<App>, room: Room) {
     let join_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     join_row.pack_start(&gtk::Label::new(Some("Who can join:")), false, false, 0);
     join_row.pack_start(&join, true, true, 0);
+    let listed = gtk::CheckButton::with_label("Show in the server's public room directory");
+    listed.set_tooltip_text(Some(
+        "Many servers only show a listed room in searches when anyone can join it.",
+    ));
     let members = gtk::Box::new(gtk::Orientation::Vertical, 2);
     let scroll = gtk::ScrolledWindow::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
     scroll.add(&members);
@@ -82,6 +87,7 @@ pub fn open(app: &Rc<App>, room: Room) {
     root.pack_start(&topic, false, false, 0);
     root.pack_start(&pictures, false, false, 0);
     root.pack_start(&join_row, false, false, 0);
+    root.pack_start(&listed, false, false, 0);
     root.pack_start(&save, false, false, 0);
     root.pack_start(&status, false, false, 0);
     root.pack_start(&heading, false, false, 0);
@@ -99,10 +105,13 @@ pub fn open(app: &Rc<App>, room: Room) {
         change_picture,
         remove_picture,
         join,
+        listed,
         loading_join: std::cell::Cell::new(false),
     });
     let dd = d.clone();
     d.join.connect_changed(move |_| dd.join_changed());
+    let dd = d.clone();
+    d.listed.connect_toggled(move |_| dd.listed_changed());
     let dd = d.clone();
     d.save.connect_clicked(move |_| dd.save_settings());
     let dd = d.clone();
@@ -145,7 +154,10 @@ impl Dialog {
             JoinAccess::Anyone => "public",
             JoinAccess::Other => "other",
         }));
+        self.listed.set_active(s.listed == Some(true));
         self.loading_join.set(false);
+        self.listed
+            .set_sensitive(s.can_set_join_access && s.listed.is_some());
         self.join
             .set_sensitive(s.can_set_join_access && s.join_access != JoinAccess::Other);
         if !(s.can_rename || s.can_set_topic) {
@@ -196,6 +208,27 @@ impl Dialog {
             self.members.pack_start(&row, false, false, 0);
         }
         self.members.show_all();
+    }
+
+    fn listed_changed(self: &Rc<Self>) {
+        if self.loading_join.get() {
+            return;
+        }
+        let (listed, this, room) = (self.listed.is_active(), self.clone(), self.room.clone());
+        spawn_async(
+            async move {
+                rooms::set_listed(&room, listed)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            move |res| match res {
+                Ok(()) => this.status.set_text("Directory listing updated."),
+                Err(e) => {
+                    error_dialog(&this.app, &format!("Could not change the listing: {e}"));
+                    this.load(false);
+                }
+            },
+        );
     }
 
     fn join_changed(self: &Rc<Self>) {

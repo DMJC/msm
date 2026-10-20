@@ -265,6 +265,9 @@ pub struct RoomSettings {
     pub can_set_avatar: bool,
     pub join_access: JoinAccess,
     pub can_set_join_access: bool,
+    /// Whether the room is published in the homeserver's room directory
+    /// (`None` if the server wouldn't say).
+    pub listed: Option<bool>,
     pub members: Vec<MemberRow>,
 }
 
@@ -275,6 +278,18 @@ pub enum JoinAccess {
     InviteOnly,
     Anyone,
     Other,
+}
+
+pub async fn set_listed(room: &Room, listed: bool) -> Result<(), RoomError> {
+    use matrix_sdk::ruma::api::client::room::Visibility;
+    room.privacy_settings()
+        .update_room_visibility(if listed {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        })
+        .await
+        .map_err(mx)
 }
 
 pub async fn set_join_access(room: &Room, access: JoinAccess) -> Result<(), RoomError> {
@@ -346,6 +361,12 @@ pub async fn room_settings(room: &Room) -> Result<RoomSettings, RoomError> {
             _ => JoinAccess::Other,
         },
         can_set_join_access: pl.user_can_send_state(&me, StateEventType::RoomJoinRules),
+        listed: room
+            .privacy_settings()
+            .get_room_visibility()
+            .await
+            .ok()
+            .map(|v| v == matrix_sdk::ruma::api::client::room::Visibility::Public),
         members,
     })
 }
