@@ -1330,6 +1330,14 @@ async fn kick_ban_unban_and_room_settings_respect_power_levels() {
     let s = rooms::room_settings(&room).await.unwrap();
     assert_eq!(row(&s, &b).unwrap().power, 0, "back to member");
 
+    // Arbitrary levels work too.
+    rooms::set_role(&room, &b, 25).await.unwrap();
+    sync_a_bit(&alice).await;
+    let s = rooms::room_settings(&room).await.unwrap();
+    assert_eq!(row(&s, &b).unwrap().power, 25);
+    rooms::set_role(&room, &b, 0).await.unwrap();
+    sync_a_bit(&alice).await;
+
     // Room picture: only those allowed to send m.room.avatar, and it reaches members.
     let png: Vec<u8> = vec![
         0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,

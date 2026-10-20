@@ -252,3 +252,6 @@ UI is still a placeholder window.
 ## Session 17 addendum: search older history
 - Typing in the conversation search still filters loaded messages; pressing Enter now pages backwards (up to 30 pages of 30) until the start of the room, showing "N found · searching older…" / "reached the start" / "stopped; press Enter to search further back". A new query cancels a running scan.
 - Verified live in the GTK window: 80-message room, keyword only in message 3 → 0 found while typing, 1 found after Enter. Works on decrypted client-side history, so it also covers encrypted rooms. No automated test (UI-only logic). The ellipsized status label was added after the screenshot and not re-checked visually.
+
+## Session 17 addendum: custom power levels
+- Role menu gained "Custom level…" (0–100 prompt, validated); members at other levels show "(custom level)", ≥100 (including the room creator's effectively infinite level) "(admin)". Verified: integration test (level 25 round-trips) and live GTK (set Sandy to 25 → "(custom level)"). Note Synapse accepted a level above the creator's 100 in the test room, so "can't exceed your own level" is server-defined, not asserted.

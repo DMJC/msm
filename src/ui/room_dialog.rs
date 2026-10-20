@@ -159,7 +159,8 @@ impl Dialog {
             let shown = self.app.mgr.borrow().resolver().resolve(&m.mxid, None);
             let tag = match m.membership {
                 MemberState::Joined if m.power >= 100 => " (admin)",
-                MemberState::Joined if m.power >= 50 => " (moderator)",
+                MemberState::Joined if m.power == 50 => " (moderator)",
+                MemberState::Joined if m.power != 0 => " (custom level)",
                 MemberState::Joined => "",
                 MemberState::Invited => " (invited)",
                 MemberState::Banned => " (banned)",
@@ -240,6 +241,29 @@ impl Dialog {
             });
             menu.append(&item);
         }
+        let custom =
+            gtk::MenuItem::with_label(&if rooms::ROLES.iter().any(|(l, _)| *l == m.power) {
+                "Custom level…".to_owned()
+            } else {
+                format!("Custom level… (now {})", m.power)
+            });
+        let (this, mxid, current) = (self.clone(), m.mxid.clone(), m.power);
+        custom.connect_activate(move |_| {
+            let Some(text) = prompt(
+                &this.app,
+                "Power level (0–100, higher than your own is refused)",
+                "Level",
+                &current.to_string(),
+            ) else {
+                return;
+            };
+            match text.trim().parse::<i64>() {
+                Ok(level) if (0..=100).contains(&level) => this.set_role(&mxid, level),
+                _ => error_dialog(&this.app, "Enter a whole number from 0 to 100."),
+            }
+        });
+        menu.append(&gtk::SeparatorMenuItem::new());
+        menu.append(&custom);
         menu.show_all();
         button.set_popup(Some(&menu));
         button
