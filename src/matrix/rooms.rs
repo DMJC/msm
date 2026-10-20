@@ -190,7 +190,23 @@ pub async fn create_group(
 pub async fn invite_user(room: &Room, mxid: &str) -> Result<(), RoomError> {
     let uid =
         <&UserId>::try_from(mxid.trim()).map_err(|_| RoomError::InvalidUser(mxid.to_owned()))?;
-    room.invite_user_by_id(uid).await.map_err(mx)
+    match room.invite_user_by_id(uid).await {
+        Ok(()) => Ok(()),
+        // The SDK shares past room keys before inviting and refuses when this
+        // device is not cross-signed; the invite itself must still go out.
+        Err(e) if e.to_string().contains("not verified") => {
+            use matrix_sdk::ruma::api::client::membership::invite_user::v3::{
+                InvitationRecipient, InviteUserId, Request,
+            };
+            let recipient = InvitationRecipient::UserId(InviteUserId::new(uid.to_owned()));
+            room.client()
+                .send(Request::new(room.room_id().to_owned(), recipient))
+                .await
+                .map(|_| ())
+                .map_err(mx)
+        }
+        Err(e) => Err(mx(e)),
+    }
 }
 
 /// Joined members with their room-specific display names (from member state events).

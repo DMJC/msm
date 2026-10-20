@@ -212,3 +212,8 @@ UI is still a placeholder window.
 
 ## Exact next task
 1. Optional: three-account GUI run; check that msm's GTK UI shows the ✔ for a user verified this way; Element's presence and avatar inside msm.
+
+## Session 17 addendum: invite fix
+- Full suite re-run found `invite_user` failing ("device is not verified") once the invitee had a cross-signing identity (accounts used in the Element SAS runs). Cause: matrix-sdk shares room history before inviting and aborts if this device is not cross-signed. `rooms::invite_user` now falls back to a plain invite request in that case.
+- Results: 59 unit + 4 bin + 20 integration pass, clippy clean.
+- Next task unchanged: GTK ✔ check for SAS-verified users, Element presence/avatar in msm, optional three-account GUI run.
