@@ -478,6 +478,31 @@ impl App {
         self.stack.set_visible_child_name("login");
     }
 
+    /// On quit: stop syncing and tell the server we are offline, so contacts
+    /// don't see us as online until the server's presence timeout. Best effort,
+    /// bounded to two seconds.
+    pub fn shutdown(&self) {
+        if let Some(t) = self.sync_task.borrow_mut().take() {
+            t.abort();
+        }
+        let Some(client) = self.client.borrow().clone() else {
+            return;
+        };
+        let offline = presence::Desired::new(presence::UiStatus::Offline, "");
+        let res = runtime().block_on(async {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                presence::publish(&client, &offline),
+            )
+            .await
+        });
+        match res {
+            Ok(Ok(())) => tracing::info!("set presence offline on quit"),
+            Ok(Err(e)) => tracing::warn!("could not set presence offline on quit: {e}"),
+            Err(_) => tracing::warn!("timed out setting presence offline on quit"),
+        }
+    }
+
     pub fn end_session(&self, server_logout: bool) {
         if let Some(t) = self.sync_task.borrow_mut().take() {
             t.abort();

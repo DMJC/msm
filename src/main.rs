@@ -66,6 +66,8 @@ fn activate(gtk_app: &gtk::Application) {
     window.add(&stack);
 
     let state = app::App::new(window.clone(), stack.clone(), db);
+    let s = state.clone();
+    gtk_app.connect_shutdown(move |_| s.shutdown());
     state.start_tray();
     state.start_idle_monitor();
     let s = state.clone();

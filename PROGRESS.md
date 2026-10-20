@@ -239,3 +239,7 @@ UI is still a placeholder window.
 
 ## Session 17 addendum: docs
 - Added docs/ARCHITECTURE, REQUIREMENTS, SECURITY, TESTING, IMPLEMENTATION_STATUS (written from the code and test records; no code change). Logging/XDG items were already implemented; explicit clean-shutdown handling is still open.
+
+## Session 17 addendum: clean shutdown
+- `App::shutdown` (GApplication `shutdown`): aborts the sync task and publishes offline presence (2 s bound). Verified live: bob's view of alice went online → offline after the tray "Quit" (triggered through the dbusmenu `Event` call; exit confirmed in the log "set presence offline on quit").
+- Side observation: a WM_DELETE_WINDOW close event sent to the main window left the process running (hide-to-tray behaviour with the tray registered) — consistent with, but not a screenshot-verified proof of, hide-to-tray.

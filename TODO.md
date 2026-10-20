@@ -4,7 +4,7 @@
 - [x] Verify toolchain, GTK3 and matrix-sdk dependency compatibility
 - [x] Cargo project + module skeleton (contacts, storage, ui)
 - [x] rustfmt + clippy installed and clean
-- [x] Logging (tracing, RUST_LOG), XDG data dir (directories crate); [ ] explicit clean-shutdown handling
+- [x] Logging (tracing, RUST_LOG), XDG data dir (directories crate); [x] clean shutdown (offline presence on quit, verified)
 - [x] GTK window launches under Wayland (no visual check)
 - [x] docs/: ARCHITECTURE, REQUIREMENTS, MATRIX_COMPATIBILITY, SECURITY, TESTING, IMPLEMENTATION_STATUS
 ## Phase 3
