@@ -259,3 +259,8 @@ UI is still a placeholder window.
 ## Session 17 addendum: directory listing
 - Room settings checkbox "Show in the server's public room directory" (`rooms::set_listed`, `RoomSettings.listed`), enabled for those who may change join rules; the server decides (Synapse refuses unless `room_list_publication_rules` allows — the test script `scripts/test-homeserver.sh` now configures an allow rule, as Synapse otherwise returns 403 "Not allowed to publish room").
 - Verified: integration test (unlisted → listed → unlisted, read back from the server) and live GTK toggle. Not observed: the room appearing in `/publicRooms` — Synapse only lists published rooms that are also joinable by anyone, and the test room was invite-only.
+
+## Session 17 addendum: cross-signing identity reset
+- Security → "Reset cross-signing identity…" (`encryption::reset_identity`): confirm, password (UIA), new cross-signing keys; if recovery existed its key is replaced and shown. OAuth-based accounts get an error pointing at the provider's approval URL (not exercised).
+- Caveat: the SDK regenerates local keys before the server accepts them, so a wrong password leaves this device out of step until the reset is retried; the UI error says so only via the message, retry works (tested).
+- Verified: integration test on a fresh user (wrong password refused with server keys unchanged; reset changes the master key and returns a new recovery key; status stays ready/Enabled) and live GTK (confirm → password → new key differs from the old). Full suite 59+4+22 pass, clippy clean. Signed alice out of the GUI during this check (her session was wiped; test accounts still work).

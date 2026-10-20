@@ -16,6 +16,6 @@ Verified means exercised against a local Synapse (integration test) and/or in th
 | Room moderation: kick/ban/unban, roles, name/topic/picture, join rules | Verified |
 | E2EE, SAS verification, recovery set up/enter/reset/off | Verified (SAS vs Element both ways) |
 | Block / unblock | Verified |
-| QR verification, cross-signing reset | Not implemented |
+| QR verification | Not implemented |
 | Audio/video calls and playback | Not implemented |
 | Packaging (.deb/.rpm/Windows) | Not started |

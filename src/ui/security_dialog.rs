@@ -75,6 +75,8 @@ pub fn open(app: &Rc<App>) {
     let disable = gtk::Button::with_label("Turn off recovery…");
     area.pack_start(&reset, false, false, 0);
     area.pack_start(&disable, false, false, 0);
+    let reset_identity = gtk::Button::with_label("Reset cross-signing identity…");
+    area.pack_start(&reset_identity, false, false, 0);
     let verify_other = gtk::Button::with_label("Verify another device…");
     area.pack_start(&verify_other, false, false, 0);
     {
@@ -165,6 +167,38 @@ pub fn open(app: &Rc<App>) {
                     Ok(key) => show_recovery_key(&a2, &key),
                     Err(e) => error_dialog(&a2, &e),
                 }
+                r2();
+            },
+        );
+    });
+
+    let (a, c, r) = (app.clone(), client.clone(), reload.clone());
+    reset_identity.connect_clicked(move |_| {
+        if !confirm(
+            &a,
+            "Reset your cross-signing identity? Everyone who verified you will see you as \
+             unverified until they verify you again, and your recovery key (if any) is replaced. \
+             Only do this if you have lost access to your other devices and your recovery key.",
+        ) {
+            return;
+        }
+        let Some(pw) = prompt_secret(&a, "Confirm your password", "Account password") else {
+            return;
+        };
+        let (a2, r2, c2) = (a.clone(), r.clone(), c.clone());
+        spawn_async(
+            async move {
+                encryption::reset_identity(&c2, &pw)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            move |res| {
+                match res {
+                    Ok(Some(key)) => show_recovery_key(&a2, &key),
+                    Ok(None) => {}
+                    Err(e) => error_dialog(&a2, &e),
+                }
+                a2.refresh_trust();
                 r2();
             },
         );

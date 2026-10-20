@@ -1579,3 +1579,45 @@ async fn blocking_uses_the_account_ignore_list_and_syncs_to_other_sessions() {
         .unwrap();
     assert!(ignore::blocked(&first).await.is_empty());
 }
+
+#[tokio::test]
+async fn resetting_the_identity_replaces_cross_signing_keys_and_the_recovery_key() {
+    use msm::matrix::encryption::{self, Recovery};
+    let Some(hs) = homeserver() else { return };
+    let (a, _name, pw) = register_fresh(&hs).await;
+    sync_a_bit(&a).await;
+    let old_key = encryption::setup_recovery(&a, &pw).await.unwrap();
+    let me = a.user_id().unwrap().to_owned();
+    let master = |c: Client, me: matrix_sdk::ruma::OwnedUserId| async move {
+        c.encryption()
+            .request_user_identity(&me)
+            .await
+            .unwrap()
+            .expect("own identity")
+            .master_key()
+            .get_first_key()
+            .map(|k| k.to_base64())
+    };
+    let before = master(a.clone(), me.clone()).await;
+    assert!(before.is_some());
+
+    assert!(encryption::reset_identity(&a, "wrong").await.is_err());
+    assert_eq!(
+        master(a.clone(), me.clone()).await,
+        before,
+        "failed reset changes nothing"
+    );
+
+    let new_key = encryption::reset_identity(&a, &pw)
+        .await
+        .unwrap()
+        .expect("recovery was on, so a new key is returned");
+    assert_ne!(new_key, old_key);
+    sync_a_bit(&a).await;
+    let after = master(a.clone(), me).await;
+    assert!(after.is_some());
+    assert_ne!(after, before, "a new master key");
+    let st = encryption::status(&a).await;
+    assert!(st.cross_signing_ready, "{st:?}");
+    assert_eq!(st.recovery, Recovery::Enabled);
+}

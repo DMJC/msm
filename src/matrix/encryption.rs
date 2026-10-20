@@ -161,6 +161,47 @@ pub async fn reset_recovery_key(client: &Client) -> Result<String, SecurityError
     client.encryption().recovery().reset_key().await.map_err(mx)
 }
 
+/// Throw away this account's cross-signing identity and make a new one. Everyone
+/// who verified you must verify you again. If recovery was on, its key is
+/// replaced too (the old secrets stored under it are stale); the new key is returned.
+/// `password` answers the server's interactive-auth challenge. A failed attempt
+/// (wrong password) leaves this device's local keys out of step with the server
+/// until the reset is retried successfully.
+pub async fn reset_identity(
+    client: &Client,
+    password: &str,
+) -> Result<Option<String>, SecurityError> {
+    use matrix_sdk::encryption::CrossSigningResetAuthType;
+    let user = client
+        .user_id()
+        .ok_or(SecurityError::NotLoggedIn)?
+        .to_owned();
+    let enc = client.encryption();
+    let was_enabled = status(client).await.recovery != Recovery::Disabled;
+    if let Some(handle) = enc.reset_cross_signing().await.map_err(mx)? {
+        match handle.auth_type() {
+            CrossSigningResetAuthType::Uiaa(info) => {
+                let mut pw = Password::new(UserIdentifier::from(user), password.to_owned());
+                pw.session = info.session.clone();
+                handle
+                    .auth(Some(AuthData::Password(pw)))
+                    .await
+                    .map_err(|e| SecurityError::Auth(e.to_string()))?;
+            }
+            CrossSigningResetAuthType::OAuth(info) => {
+                return Err(SecurityError::Matrix(format!(
+                    "this account signs in through your provider; approve the reset at {}",
+                    info.approval_url
+                )));
+            }
+        }
+    }
+    if was_enabled {
+        return Ok(Some(enc.recovery().reset_key().await.map_err(mx)?));
+    }
+    Ok(None)
+}
+
 /// Delete secret storage and the key backup from the server. Existing devices keep
 /// their local keys; new devices will no longer be able to read older history.
 pub async fn disable_recovery(client: &Client) -> Result<(), SecurityError> {
