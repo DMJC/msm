@@ -263,7 +263,31 @@ pub struct RoomSettings {
     pub can_rename: bool,
     pub can_set_topic: bool,
     pub can_set_avatar: bool,
+    pub join_access: JoinAccess,
+    pub can_set_join_access: bool,
     pub members: Vec<MemberRow>,
+}
+
+/// Who may join a room. Other rules (knock, restricted, …) are shown but not
+/// offered, so we never silently rewrite a rule we don't model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinAccess {
+    InviteOnly,
+    Anyone,
+    Other,
+}
+
+pub async fn set_join_access(room: &Room, access: JoinAccess) -> Result<(), RoomError> {
+    use matrix_sdk::ruma::events::room::join_rules::JoinRule;
+    let rule = match access {
+        JoinAccess::InviteOnly => JoinRule::Invite,
+        JoinAccess::Anyone => JoinRule::Public,
+        JoinAccess::Other => return Err(RoomError::Matrix("unsupported join rule".into())),
+    };
+    room.privacy_settings()
+        .update_join_rule(rule)
+        .await
+        .map_err(mx)
 }
 
 pub async fn room_settings(room: &Room) -> Result<RoomSettings, RoomError> {
@@ -312,6 +336,16 @@ pub async fn room_settings(room: &Room) -> Result<RoomSettings, RoomError> {
         can_rename: pl.user_can_send_state(&me, StateEventType::RoomName),
         can_set_topic: pl.user_can_send_state(&me, StateEventType::RoomTopic),
         can_set_avatar: pl.user_can_send_state(&me, StateEventType::RoomAvatar),
+        join_access: match room.join_rule() {
+            Some(matrix_sdk::ruma::events::room::join_rules::JoinRule::Invite) => {
+                JoinAccess::InviteOnly
+            }
+            Some(matrix_sdk::ruma::events::room::join_rules::JoinRule::Public) => {
+                JoinAccess::Anyone
+            }
+            _ => JoinAccess::Other,
+        },
+        can_set_join_access: pl.user_can_send_state(&me, StateEventType::RoomJoinRules),
         members,
     })
 }

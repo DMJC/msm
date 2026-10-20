@@ -21,7 +21,7 @@ use std::rc::Rc;
 use gtk::glib;
 use gtk::prelude::*;
 use matrix_sdk::Room;
-use msm::matrix::rooms::{self, MemberState, RoomSettings};
+use msm::matrix::rooms::{self, JoinAccess, MemberState, RoomSettings};
 use msm::matrix::{avatars, media};
 
 use crate::app::{App, spawn_async};
@@ -37,6 +37,9 @@ struct Dialog {
     members: gtk::Box,
     change_picture: gtk::Button,
     remove_picture: gtk::Button,
+    join: gtk::ComboBoxText,
+    /// Set while the combo is filled from the server so that doesn't count as an edit.
+    loading_join: std::cell::Cell<bool>,
 }
 
 pub fn open(app: &Rc<App>, room: Room) {
@@ -61,6 +64,13 @@ pub fn open(app: &Rc<App>, room: Room) {
     let pictures = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     pictures.pack_start(&change_picture, true, true, 0);
     pictures.pack_start(&remove_picture, true, true, 0);
+    let join = gtk::ComboBoxText::new();
+    join.append(Some("invite"), "Invite only");
+    join.append(Some("public"), "Anyone can join");
+    join.append(Some("other"), "Other (set elsewhere)");
+    let join_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    join_row.pack_start(&gtk::Label::new(Some("Who can join:")), false, false, 0);
+    join_row.pack_start(&join, true, true, 0);
     let members = gtk::Box::new(gtk::Orientation::Vertical, 2);
     let scroll = gtk::ScrolledWindow::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
     scroll.add(&members);
@@ -71,6 +81,7 @@ pub fn open(app: &Rc<App>, room: Room) {
     root.pack_start(&name, false, false, 0);
     root.pack_start(&topic, false, false, 0);
     root.pack_start(&pictures, false, false, 0);
+    root.pack_start(&join_row, false, false, 0);
     root.pack_start(&save, false, false, 0);
     root.pack_start(&status, false, false, 0);
     root.pack_start(&heading, false, false, 0);
@@ -87,7 +98,11 @@ pub fn open(app: &Rc<App>, room: Room) {
         members,
         change_picture,
         remove_picture,
+        join,
+        loading_join: std::cell::Cell::new(false),
     });
+    let dd = d.clone();
+    d.join.connect_changed(move |_| dd.join_changed());
     let dd = d.clone();
     d.save.connect_clicked(move |_| dd.save_settings());
     let dd = d.clone();
@@ -124,6 +139,15 @@ impl Dialog {
         self.save.set_sensitive(s.can_rename || s.can_set_topic);
         self.change_picture.set_sensitive(s.can_set_avatar);
         self.remove_picture.set_sensitive(s.can_set_avatar);
+        self.loading_join.set(true);
+        self.join.set_active_id(Some(match s.join_access {
+            JoinAccess::InviteOnly => "invite",
+            JoinAccess::Anyone => "public",
+            JoinAccess::Other => "other",
+        }));
+        self.loading_join.set(false);
+        self.join
+            .set_sensitive(s.can_set_join_access && s.join_access != JoinAccess::Other);
         if !(s.can_rename || s.can_set_topic) {
             self.status
                 .set_text("You don't have permission to change this room's settings.");
@@ -171,6 +195,32 @@ impl Dialog {
             self.members.pack_start(&row, false, false, 0);
         }
         self.members.show_all();
+    }
+
+    fn join_changed(self: &Rc<Self>) {
+        if self.loading_join.get() {
+            return;
+        }
+        let access = match self.join.active_id().as_deref() {
+            Some("invite") => JoinAccess::InviteOnly,
+            Some("public") => JoinAccess::Anyone,
+            _ => return,
+        };
+        let (this, room) = (self.clone(), self.room.clone());
+        spawn_async(
+            async move {
+                rooms::set_join_access(&room, access)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            move |res| match res {
+                Ok(()) => this.status.set_text("Join setting updated."),
+                Err(e) => {
+                    error_dialog(&this.app, &format!("Could not change who can join: {e}"));
+                    this.load(false);
+                }
+            },
+        );
     }
 
     fn role_button(self: &Rc<Self>, m: &rooms::MemberRow) -> gtk::MenuButton {

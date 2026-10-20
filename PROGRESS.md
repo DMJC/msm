@@ -224,3 +224,7 @@ UI is still a placeholder window.
 
 ## Session 17 addendum: licensing
 - GPLv3-or-later header (Copyright 2026 James Carthew, no tool attribution) added to all 36 .rs files; `COPYING` holds the GPL-3 text; Cargo.toml `license = "GPL-3.0-or-later"`. Clippy clean, tests pass (integration tests skip without MSM_TEST_HOMESERVER).
+
+## Session 17 addendum: join rules
+- Room settings now has "Who can join" (Invite only / Anyone can join / Other, read-only), gated by `m.room.join_rules` power level; `rooms::set_join_access`, `RoomSettings.join_access/can_set_join_access`.
+- Verified: integration test (non-admin refused and shown can_set=false; admin changes it, member sees it sync; `Other` rejected) and the live GTK dialog (shows "Invite only", control greyed out for a non-admin). The enabled-control click in the GUI was not exercised. Room-directory visibility is not implemented.

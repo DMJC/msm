@@ -20,7 +20,7 @@
 ## Phase 5+
 - [x] DM discovery (m.direct), messaging, conversation UI, typing (verified vs Synapse and in the GUI; text, replies, edits, reactions, redactions also vs Element Web)
 - [x] Group rooms/invites: list, create, invite, accept/decline, leave, room windows (verified vs Synapse + GUI)
-- [x] Membership management: kick/ban/unban, room name/topic (verified vs Synapse + GUI); [x] role changes (member/moderator/admin); [x] room picture; [ ] join rules
+- [x] Membership management: kick/ban/unban, room name/topic (verified vs Synapse + GUI); [x] role changes (member/moderator/admin); [x] room picture; [x] join rules (invite-only / anyone; other rules shown read-only)
 - [x] Own status + tray + presence publishing (verified vs Synapse and on Wayland/MATE panel)
 - [x] Automatic Away timer (Wayland ext-idle-notify; verified on real Wayfire session)
 - [ ] Contact presence display verified with two users sharing a room

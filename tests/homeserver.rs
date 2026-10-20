@@ -1318,6 +1318,40 @@ async fn kick_ban_unban_and_room_settings_respect_power_levels() {
     sync_a_bit(&bob).await;
     assert!(broom.avatar_url().is_none());
 
+    // Join rules: a moderator-less member can't change them; the admin can, and it syncs.
+    use msm::matrix::rooms::JoinAccess;
+    assert_eq!(
+        rooms::room_settings(&room).await.unwrap().join_access,
+        JoinAccess::InviteOnly
+    );
+    assert!(
+        !rooms::room_settings(&broom)
+            .await
+            .unwrap()
+            .can_set_join_access
+    );
+    assert!(
+        rooms::set_join_access(&broom, JoinAccess::Anyone)
+            .await
+            .is_err()
+    );
+    rooms::set_join_access(&room, JoinAccess::Anyone)
+        .await
+        .unwrap();
+    sync_a_bit(&bob).await;
+    assert_eq!(
+        rooms::room_settings(&broom).await.unwrap().join_access,
+        JoinAccess::Anyone
+    );
+    rooms::set_join_access(&room, JoinAccess::InviteOnly)
+        .await
+        .unwrap();
+    assert!(
+        rooms::set_join_access(&room, JoinAccess::Other)
+            .await
+            .is_err()
+    );
+
     // Name and topic changes reach the other members.
     assert!(rooms::set_room_name(&room, "  ").await.is_err());
     rooms::set_room_name(&room, "Renamed").await.unwrap();
