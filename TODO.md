@@ -35,7 +35,7 @@
 - [x] In-conversation search (loaded messages), replies (verified vs Synapse + GUI)
 - [x] Integration tests vs local Synapse (17 tests) and an Element Web interop run (text, replies, edits, reactions, redactions, attachments, avatar); [ ] Element checks for verification, presence
 - [ ] Video/Audio calls
-- [ ] Packaging, user docs
+- [x] README with install and usage (scripts/install-local.sh); [ ] distro packaging
 
 ## Platform
 - [x] Native Wayland (GTK3), StatusNotifierItem tray with status menu
