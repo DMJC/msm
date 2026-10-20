@@ -291,3 +291,7 @@ Everything feasible without a real desktop panel, a camera, or a Windows machine
 ## Session 17 addendum: GitHub
 - Remote `origin` = https://github.com/DMJC/msm (default branch `main`; local `master` tracks it). Pushed with the GitHub initial LICENSE commit merged in. Tag `v0.1.0` pushed; the `packages` workflow (run 39393512006) succeeded on all steps: dependencies, `cargo test --lib`, `scripts/build-packages.sh`, artifact upload (`linux-packages`, the .deb and .rpm).
 - Still unverified: installing those packages on a clean Debian/Fedora system.
+
+## Post-packaging verification (2026-10-21)
+- Full suite re-run against local Synapse after the packaging additions: 66 unit + 4 bin + 23 integration pass, clippy clean.
+- Remaining items are all blocked on hardware/OS access (see "Exact next task").
