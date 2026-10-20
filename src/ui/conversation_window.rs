@@ -52,6 +52,9 @@ pub struct ConversationWindow {
     title: gtk::Label,
     avatar: gtk::Image,
     typing: gtk::Label,
+    cancel_upload: gtk::Button,
+    /// Set while an attachment is uploading; a message cancels it.
+    upload_cancel: RefCell<Option<async_channel::Sender<()>>>,
     input: gtk::TextView,
     buffer: gtk::TextBuffer,
     /// Joined member count once the member list has been loaded.
@@ -144,7 +147,12 @@ impl ConversationWindow {
         let typing = gtk::Label::new(None);
         typing.set_xalign(0.0);
         typing.style_context().add_class("dim-label");
-        root.pack_start(&typing, false, false, 0);
+        let cancel_upload = gtk::Button::with_label("Cancel");
+        cancel_upload.set_no_show_all(true);
+        let status_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        status_row.pack_start(&typing, true, true, 0);
+        status_row.pack_end(&cancel_upload, false, false, 0);
+        root.pack_start(&status_row, false, false, 0);
 
         let reply_label = gtk::Label::new(None);
         reply_label.set_xalign(0.0);
@@ -201,6 +209,8 @@ impl ConversationWindow {
             title,
             avatar,
             typing,
+            cancel_upload,
+            upload_cancel: RefCell::new(None),
             input,
             buffer,
             member_count: RefCell::new(None),
@@ -292,6 +302,12 @@ impl ConversationWindow {
         });
         let c = cw.clone();
         cw.older_button.connect_clicked(move |_| c.load_older());
+        let c = cw.clone();
+        cw.cancel_upload.connect_clicked(move |_| {
+            if let Some(tx) = c.upload_cancel.borrow().as_ref() {
+                let _ = tx.try_send(());
+            }
+        });
         let c = cw.clone();
         attach_btn.connect_clicked(move |_| c.choose_and_send_file());
         let c = cw.clone();
@@ -975,22 +991,54 @@ impl ConversationWindow {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
+        if self.upload_cancel.borrow().is_some() {
+            if temporary {
+                let _ = std::fs::remove_file(&path);
+            }
+            self.typing
+                .set_text("Wait for the current upload to finish (or cancel it).");
+            return;
+        }
         self.typing.set_text(&format!("Uploading {name}…"));
+        let (cancel_tx, cancel_rx) = async_channel::bounded(1);
+        let (progress_tx, progress_rx) = async_channel::unbounded();
+        *self.upload_cancel.borrow_mut() = Some(cancel_tx);
+        self.cancel_upload.show();
+        let this = self.clone();
+        glib::MainContext::default().spawn_local(async move {
+            while let Ok((sent, total)) = progress_rx.recv().await {
+                if total > 0 && this.upload_cancel.borrow().is_some() {
+                    this.typing
+                        .set_text(&format!("Uploading {name}… {}%", sent * 100 / total));
+                }
+            }
+        });
         let (room, this) = (self.room.clone(), self.clone());
         spawn_async(
             async move {
-                let res = media::send_file(&room, &path)
-                    .await
-                    .map_err(|e| e.to_string());
+                let res = media::send_file_with(
+                    &room,
+                    &path,
+                    media::Transfer {
+                        progress: Some(progress_tx),
+                        cancel: Some(cancel_rx),
+                    },
+                )
+                .await;
                 if temporary {
                     let _ = std::fs::remove_file(&path);
                 }
                 res
             },
-            move |res| match res {
-                // The message itself arrives through the live event feed.
-                Ok(_) => this.typing.set_text(""),
-                Err(e) => this.typing.set_text(&format!("Could not send file: {e}")),
+            move |res| {
+                this.upload_cancel.borrow_mut().take();
+                this.cancel_upload.hide();
+                match res {
+                    // The message itself arrives through the live event feed.
+                    Ok(_) => this.typing.set_text(""),
+                    Err(media::MediaError::Cancelled) => this.typing.set_text("Upload cancelled."),
+                    Err(e) => this.typing.set_text(&format!("Could not send file: {e}")),
+                }
             },
         );
     }

@@ -11,7 +11,7 @@ Verified means exercised against a local Synapse (integration test) and/or in th
 | Presence and status messages | Verified; Element presence inside msm not checked |
 | DMs and group rooms, invites, leave | Verified |
 | Messaging: replies (with jump), edits, redactions, reactions, typing, search of loaded messages | Verified (also vs Element Web) |
-| Attachments: send, drag-and-drop, paste image, download/open | Verified; no progress or cancel |
+| Attachments: send, drag-and-drop, paste image, download/open, upload progress + cancel | Verified (progress/cancel at library level; the GUI Cancel button not exercised) |
 | Avatars incl. live change and initials | Verified |
 | Room moderation: kick/ban/unban, roles, name/topic/picture, join rules | Verified |
 | E2EE, SAS verification, recovery set up/enter/reset/off | Verified (SAS vs Element both ways) |

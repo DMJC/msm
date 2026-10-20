@@ -243,3 +243,8 @@ UI is still a placeholder window.
 ## Session 17 addendum: clean shutdown
 - `App::shutdown` (GApplication `shutdown`): aborts the sync task and publishes offline presence (2 s bound). Verified live: bob's view of alice went online → offline after the tray "Quit" (triggered through the dbusmenu `Event` call; exit confirmed in the log "set presence offline on quit").
 - Side observation: a WM_DELETE_WINDOW close event sent to the main window left the process running (hide-to-tray behaviour with the tray registered) — consistent with, but not a screenshot-verified proof of, hide-to-tray.
+
+## Session 17 addendum: upload progress / cancel
+- `media::send_file_with(room, path, Transfer{progress, cancel})` (new dep `eyeball` for the SDK's progress observable). Conversation window shows "Uploading name… N%" with a Cancel button, refuses a second upload while one runs.
+- Verified: integration test (progress reported; pre-signalled cancel → `Cancelled` and no message posted); full suite 59+4+21 pass, clippy clean. Not verified: the GUI Cancel click and visible percentage (local uploads finish instantly). Cancelling drops the request; if the media upload had already finished but the event not yet sent, an orphaned media file may remain on the server.
+- Download progress/cancel not done.

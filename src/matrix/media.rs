@@ -42,6 +42,8 @@ pub enum MediaError {
     TooLarge { size: String, limit: String },
     #[error("{0}")]
     Matrix(String),
+    #[error("cancelled")]
+    Cancelled,
 }
 
 /// Reduce an untrusted filename to a safe single path component.
@@ -97,8 +99,24 @@ fn mx(e: impl std::fmt::Display) -> MediaError {
     MediaError::Matrix(e.to_string())
 }
 
+/// Optional observers for an upload: bytes sent so far / total on `progress`,
+/// and a message on `cancel` abandons it.
+#[derive(Default)]
+pub struct Transfer {
+    pub progress: Option<async_channel::Sender<(usize, usize)>>,
+    pub cancel: Option<async_channel::Receiver<()>>,
+}
+
 /// Upload `path` and post it to `room`. Returns the new event's ID.
 pub async fn send_file(room: &Room, path: &Path) -> Result<String, MediaError> {
+    send_file_with(room, path, Transfer::default()).await
+}
+
+pub async fn send_file_with(
+    room: &Room,
+    path: &Path,
+    transfer: Transfer,
+) -> Result<String, MediaError> {
     let meta = std::fs::metadata(path).map_err(|e| MediaError::Read(e.to_string()))?;
     if !meta.is_file() {
         return Err(MediaError::Read("not a regular file".into()));
@@ -134,10 +152,42 @@ pub async fn send_file(room: &Room, path: &Path) -> Result<String, MediaError> {
         }),
         _ => AttachmentInfo::File(BaseFileInfo { size }),
     };
-    let r = room
+    let observable = eyeball::SharedObservable::new(matrix_sdk::TransmissionProgress::default());
+    let upload = room
         .send_attachment(name, &mime, data, AttachmentConfig::new().info(info))
-        .await
-        .map_err(mx)?;
+        .with_send_progress_observable(observable.clone());
+    let reporter = transfer.progress.map(|tx| {
+        let mut sub = observable.subscribe();
+        async move {
+            while let Some(p) = sub.next().await {
+                if tx.send((p.current, p.total)).await.is_err() {
+                    break;
+                }
+            }
+            // Nobody is listening any more; the upload carries on regardless.
+            std::future::pending::<()>().await
+        }
+    });
+    let cancelled = async {
+        match &transfer.cancel {
+            Some(rx) => {
+                let _ = rx.recv().await;
+            }
+            None => std::future::pending().await,
+        }
+    };
+    let reporter = async {
+        match reporter {
+            Some(r) => r.await,
+            None => std::future::pending().await,
+        }
+    };
+    // Dropping the upload future abandons the request.
+    let r = tokio::select! {
+        r = upload => r.map_err(mx)?,
+        () = cancelled => return Err(MediaError::Cancelled),
+        () = reporter => unreachable!("the progress reporter never finishes"),
+    };
     Ok(r.event_id.to_string())
 }
 

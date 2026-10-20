@@ -808,9 +808,52 @@ async fn attachments_round_trip_encrypted() {
             .is_err()
     );
 
+    // Progress is reported while uploading, and a cancel abandons the upload.
+    let (ptx, prx) = async_channel::unbounded();
+    let id_progress = media::send_file_with(
+        &room,
+        &path,
+        media::Transfer {
+            progress: Some(ptx),
+            cancel: None,
+        },
+    )
+    .await
+    .unwrap();
+    let mut last = None;
+    while let Ok(p) = prx.try_recv() {
+        last = Some(p);
+    }
+    let (sent, total) = last.expect("progress was reported");
+    assert!(total > 0 && sent <= total);
+    let (ctx, crx) = async_channel::bounded(1);
+    ctx.send(()).await.unwrap();
+    let cancelled = media::send_file_with(
+        &room,
+        &dir.join("pixel.png"),
+        media::Transfer {
+            progress: None,
+            cancel: Some(crx),
+        },
+    )
+    .await;
+    assert!(matches!(cancelled, Err(media::MediaError::Cancelled)));
+
     sync_a_bit(&bob).await;
     let broom = bob.get_room(room.room_id()).unwrap();
     let conv = history_of(&broom).await;
+    assert!(conv.messages().iter().any(|m| m.id == id_progress));
+    assert_eq!(
+        conv.messages()
+            .iter()
+            .filter(|m| m
+                .attachment
+                .as_ref()
+                .is_some_and(|a| a.filename == "pixel.png"))
+            .count(),
+        1,
+        "the cancelled upload must not have produced a message"
+    );
     let get = |id: &str| {
         conv.messages()
             .iter()
