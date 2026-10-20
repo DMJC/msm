@@ -109,6 +109,8 @@ pub struct App {
     pub avatar_gen: Cell<u32>,
     /// Contacts whose cross-signing identity we have verified.
     pub verified_users: RefCell<HashSet<String>>,
+    /// People on the account's ignore list (blocked).
+    pub blocked_users: RefCell<HashSet<String>>,
 }
 
 impl App {
@@ -161,6 +163,7 @@ impl App {
             avatar_pending: RefCell::new(HashSet::new()),
             avatar_gen: Cell::new(0),
             verified_users: RefCell::new(HashSet::new()),
+            blocked_users: RefCell::new(HashSet::new()),
         })
     }
 
@@ -194,6 +197,7 @@ impl App {
                     SyncEvent::Connected => app.set_status("Connected"),
                     SyncEvent::Synced => {
                         app.refresh_trust();
+                        app.refresh_blocked();
                         app.refresh_invites();
                         ui::main_window::refresh(&app);
                     }
@@ -604,6 +608,46 @@ impl App {
                 app.avatars.borrow_mut().insert(k, pb);
                 app.avatar_gen.set(app.avatar_gen.get() + 1);
                 app.refresh();
+            },
+        );
+    }
+
+    /// Reload the ignore list from synced account data; redraws if it changed.
+    pub fn refresh_blocked(self: &Rc<Self>) {
+        let Some(client) = self.client.borrow().clone() else {
+            return;
+        };
+        let app = self.clone();
+        spawn_async(
+            async move { msm::matrix::ignore::blocked(&client).await },
+            move |ids| {
+                let set: HashSet<String> = ids.into_iter().collect();
+                if *app.blocked_users.borrow() != set {
+                    *app.blocked_users.borrow_mut() = set;
+                    app.refresh();
+                }
+            },
+        );
+    }
+
+    /// Block or unblock a person on the account-wide ignore list.
+    pub fn set_blocked(self: &Rc<Self>, mxid: &str, block: bool) {
+        let Some(client) = self.client.borrow().clone() else {
+            return;
+        };
+        let (app, id) = (self.clone(), mxid.to_owned());
+        spawn_async(
+            async move {
+                if block {
+                    msm::matrix::ignore::block(&client, &id).await
+                } else {
+                    msm::matrix::ignore::unblock(&client, &id).await
+                }
+                .map_err(|e| e.to_string())
+            },
+            move |res| match res {
+                Ok(()) => app.refresh_blocked(),
+                Err(e) => ui::main_window::error_dialog(&app, &e),
             },
         );
     }

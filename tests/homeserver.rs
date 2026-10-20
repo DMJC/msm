@@ -29,6 +29,7 @@ use matrix_sdk::{Client, ruma::UserId};
 use msm::contacts::contact_manager::ContactManager;
 use msm::matrix::authentication::login_unsaved;
 use msm::matrix::contacts_sync;
+use msm::matrix::ignore;
 
 fn homeserver() -> Option<String> {
     std::env::var("MSM_TEST_HOMESERVER").ok()
@@ -1471,4 +1472,43 @@ async fn avatar_change_in_a_shared_room_is_reported() {
     }
     assert_eq!(who.as_deref(), Some("@alice:localhost"));
     let _ = avatars::remove_own_avatar(&alice).await;
+}
+
+#[tokio::test]
+async fn blocking_uses_the_account_ignore_list_and_syncs_to_other_sessions() {
+    let Some(hs) = homeserver() else { return };
+    let first = login_as(&hs, "darkmage", "ign-a").await;
+    let second = login_as(&hs, "darkmage", "ign-b").await;
+    sync_a_bit(&first).await;
+    sync_a_bit(&second).await;
+    // Start clean in case an earlier run was interrupted.
+    ignore::unblock(&first, "@blocked-nobody:localhost")
+        .await
+        .unwrap();
+
+    assert!(ignore::block(&first, "nonsense").await.is_err());
+    assert!(
+        ignore::block(&first, "@darkmage:localhost").await.is_err(),
+        "cannot block yourself"
+    );
+    ignore::block(&first, "@blocked-nobody:localhost")
+        .await
+        .unwrap();
+    assert_eq!(ignore::blocked(&first).await, ["@blocked-nobody:localhost"]);
+
+    // Another session of the same account sees the block (it is account data).
+    let mut seen = false;
+    for _ in 0..10 {
+        sync_a_bit(&second).await;
+        if ignore::blocked(&second).await == ["@blocked-nobody:localhost"] {
+            seen = true;
+            break;
+        }
+    }
+    assert!(seen, "block did not reach the other session");
+
+    ignore::unblock(&first, "@blocked-nobody:localhost")
+        .await
+        .unwrap();
+    assert!(ignore::blocked(&first).await.is_empty());
 }

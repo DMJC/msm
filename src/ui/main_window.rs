@@ -340,6 +340,7 @@ fn view_signature(app: &Rc<App>, query: &str) -> String {
             c.friendship
         );
         let _ = writeln!(sig, "v|{}", app.verified_users.borrow().contains(&c.mxid));
+        let _ = writeln!(sig, "b|{}", app.blocked_users.borrow().contains(&c.mxid));
     }
     for i in app.invites.borrow().iter() {
         let who = i
@@ -543,7 +544,7 @@ fn contact_row(app: &Rc<App>, c: &Contact) -> gtk::Widget {
     let l = gtk::Label::new(None);
     l.set_xalign(0.0);
     l.set_markup(&format!(
-        "{}{}{}{}{}{}",
+        "{}{}{}{}{}{}{}",
         presence_dot(presence),
         if c.favorite { "★ " } else { "" },
         gtk::glib::markup_escape_text(&display),
@@ -556,6 +557,11 @@ fn contact_row(app: &Rc<App>, c: &Contact) -> gtk::Widget {
             Friendship::Outgoing => " <small><i>(request sent)</i></small>",
             Friendship::Friends => " <small>👥</small>",
             _ => "",
+        },
+        if app.blocked_users.borrow().contains(&c.mxid) {
+            " <small><i>(blocked)</i></small>"
+        } else {
+            ""
         },
         if unread > 0 {
             format!("  <b><span foreground='#d33'>({unread})</span></b>")
@@ -725,6 +731,16 @@ fn contact_menu(app: &Rc<App>, mxid: &str) -> gtk::Menu {
     mv.set_submenu(Some(&sub));
     menu.append(&mv);
 
+    let blocked = app.blocked_users.borrow().contains(mxid);
+    let (a, id) = (app.clone(), mxid.to_owned());
+    menu.append(&item(
+        if blocked {
+            "Unblock user"
+        } else {
+            "Block user"
+        },
+        move || a.set_blocked(&id, !blocked),
+    ));
     let (a, id) = (app.clone(), mxid.to_owned());
     menu.append(&item("Remove contact", move || {
         let _ = a.mgr.borrow_mut().remove(&id, now_ms());
