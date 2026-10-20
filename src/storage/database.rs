@@ -49,6 +49,14 @@ pub struct CalendarEntry {
     pub response: Response,
 }
 
+/// An organiser's change to an invitation, as recorded from their messages.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CalendarChange {
+    pub cancelled: bool,
+    /// New title/time/details, if the organiser rescheduled.
+    pub update: Option<(String, u64, String)>,
+}
+
 pub struct Database {
     conn: Mutex<Connection>,
 }
@@ -193,12 +201,91 @@ impl Database {
         Ok(key.and_then(|k| Response::from_key(&k)))
     }
 
-    /// Entries on the calendar (not declined), soonest first.
+    /// Record an organiser's `Update`/`Cancel` message from `sender`. Whether it counts is
+    /// decided when reading: only a change from the invitation's own sender applies.
+    pub fn note_calendar_change(
+        &self,
+        sender: &str,
+        entry: &crate::calendar::Entry,
+    ) -> Result<(), DbError> {
+        use crate::calendar::Entry;
+        let conn = self.conn.lock().expect("db lock");
+        match entry {
+            Entry::Cancel { event_id } => {
+                conn.execute(
+                    "INSERT INTO calendar_changes (event_id, sender, cancelled) VALUES (?1, ?2, 1)
+                     ON CONFLICT(event_id, sender) DO UPDATE SET cancelled = 1",
+                    params![event_id, sender],
+                )?;
+            }
+            Entry::Update { event_id, invite } => {
+                conn.execute(
+                    "INSERT INTO calendar_changes (event_id, sender, title, start_ms, description)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(event_id, sender) DO UPDATE SET
+                        title = excluded.title, start_ms = excluded.start_ms,
+                        description = excluded.description",
+                    params![
+                        event_id,
+                        sender,
+                        invite.title,
+                        invite.start_ms as i64,
+                        invite.description
+                    ],
+                )?;
+            }
+            Entry::Invite(_) | Entry::Rsvp { .. } => {}
+        }
+        Ok(())
+    }
+
+    /// The organiser's changes to invitation `event_id` sent by `invite_sender`.
+    pub fn calendar_change(
+        &self,
+        event_id: &str,
+        invite_sender: &str,
+    ) -> Result<CalendarChange, DbError> {
+        let row = self
+            .conn
+            .lock()
+            .expect("db lock")
+            .query_row(
+                "SELECT cancelled, title, start_ms, description FROM calendar_changes
+                 WHERE event_id = ?1 AND sender = ?2",
+                params![event_id, invite_sender],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)? != 0,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, Option<i64>>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        Ok(match row {
+            None => CalendarChange::default(),
+            Some((cancelled, title, start, desc)) => CalendarChange {
+                cancelled,
+                update: title
+                    .zip(start)
+                    .map(|(t, s)| (t, s as u64, desc.unwrap_or_default())),
+            },
+        })
+    }
+
+    /// Entries on the calendar (not declined or cancelled), soonest first, with the
+    /// organiser's latest title/time/details.
     pub fn calendar_entries(&self) -> Result<Vec<CalendarEntry>, DbError> {
         let conn = self.conn.lock().expect("db lock");
         let mut stmt = conn.prepare(
-            "SELECT event_id, room_id, sender, title, start_ms, description, response
-             FROM calendar_entries WHERE response != 'declined' ORDER BY start_ms, event_id",
+            "SELECT e.event_id, e.room_id, e.sender,
+                    COALESCE(c.title, e.title), COALESCE(c.start_ms, e.start_ms),
+                    COALESCE(c.description, e.description), e.response
+             FROM calendar_entries e
+             LEFT JOIN calendar_changes c ON c.event_id = e.event_id AND c.sender = e.sender
+             WHERE e.response != 'declined' AND COALESCE(c.cancelled, 0) = 0
+             ORDER BY COALESCE(c.start_ms, e.start_ms), e.event_id",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(CalendarEntry {
@@ -288,6 +375,60 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY); INSERT INTO schema_migrations VALUES (99);").unwrap();
         assert!(matches!(Database::init(conn), Err(DbError::TooNew { .. })));
+    }
+
+    #[test]
+    fn organiser_changes_apply_only_from_the_invitations_own_sender() {
+        use crate::calendar::{Entry, Invite};
+        let db = Database::open_in_memory().unwrap();
+        db.save_calendar_entry(&CalendarEntry {
+            event_id: "$e".into(),
+            room_id: "!r".into(),
+            sender: "@org:x".into(),
+            title: "Lunch".into(),
+            start_ms: 1000,
+            description: "".into(),
+            response: Response::Accepted,
+        })
+        .unwrap();
+        let moved = Entry::Update {
+            event_id: "$e".into(),
+            invite: Invite {
+                title: "Brunch".into(),
+                start_ms: 5000,
+                description: "later".into(),
+            },
+        };
+        // Someone else cannot move or cancel it.
+        db.note_calendar_change("@evil:x", &moved).unwrap();
+        db.note_calendar_change(
+            "@evil:x",
+            &Entry::Cancel {
+                event_id: "$e".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(db.calendar_entries().unwrap()[0].title, "Lunch");
+        assert_eq!(
+            db.calendar_change("$e", "@org:x").unwrap(),
+            CalendarChange::default()
+        );
+        // The organiser can reschedule, then cancel.
+        db.note_calendar_change("@org:x", &moved).unwrap();
+        let e = &db.calendar_entries().unwrap()[0];
+        assert_eq!(
+            (e.title.as_str(), e.start_ms, e.description.as_str()),
+            ("Brunch", 5000, "later")
+        );
+        db.note_calendar_change(
+            "@org:x",
+            &Entry::Cancel {
+                event_id: "$e".into(),
+            },
+        )
+        .unwrap();
+        assert!(db.calendar_entries().unwrap().is_empty());
+        assert!(db.calendar_change("$e", "@org:x").unwrap().cancelled);
     }
 
     #[test]

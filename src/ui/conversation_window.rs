@@ -327,7 +327,7 @@ impl ConversationWindow {
             }
         });
         let c = cw.clone();
-        calendar_btn.connect_clicked(move |_| c.calendar_invite_dialog());
+        calendar_btn.connect_clicked(move |_| c.calendar_invite_dialog(None));
         let c = cw.clone();
         attach_btn.connect_clicked(move |_| c.choose_and_send_file());
         let c = cw.clone();
@@ -754,6 +754,12 @@ impl ConversationWindow {
             }
         }
         let me = self.me();
+        // Organiser changes may sit later in the history than the invitation they change.
+        for m in self.conv.borrow().messages() {
+            if let (Some(e), false) = (m.calendar.as_deref(), m.redacted) {
+                let _ = self.app.db.note_calendar_change(&m.sender, e);
+            }
+        }
         let query = self.search.text().to_string();
         let searching = !query.trim().is_empty();
         let msgs: Vec<ChatMessage> = self
@@ -957,7 +963,8 @@ impl ConversationWindow {
         outer.upcast()
     }
 
-    /// The invitation's time and, for the invitee, Tentative / Accept / Decline.
+    /// The invitation's time and, for the invitee, Tentative / Accept / Decline; for the
+    /// organiser, Edit / Cancel event. Shows the organiser's latest changes.
     fn invite_card(
         self: &Rc<Self>,
         m: &ChatMessage,
@@ -967,41 +974,123 @@ impl ConversationWindow {
         use msm::calendar::{Response, format_start};
         let card = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         card.set_margin_start(16);
+        let change = self
+            .app
+            .db
+            .calendar_change(&m.id, &m.sender)
+            .unwrap_or_default();
+        let mut shown = inv.clone();
+        if let Some((title, start_ms, description)) = &change.update {
+            shown = msm::calendar::Invite {
+                title: title.clone(),
+                start_ms: *start_ms,
+                description: description.clone(),
+            };
+        }
         let current = self.app.db.calendar_response(&m.id).ok().flatten();
-        let status = if mine {
-            "Your invitation".to_owned()
+        let status = if change.cancelled {
+            "Cancelled by the organiser".to_owned()
+        } else if mine {
+            if change.update.is_some() {
+                "Your invitation (rescheduled)".to_owned()
+            } else {
+                "Your invitation".to_owned()
+            }
         } else {
+            let moved = if change.update.is_some() {
+                " · changed by the organiser"
+            } else {
+                ""
+            };
             match current {
                 Some(r) => format!(
-                    "You answered: {}",
+                    "You answered: {}{moved}",
                     r.label()
                         .replace("Accept", "Accepted")
                         .replace("Decline", "Declined")
                 ),
-                None => "Not on your calendar until you answer".to_owned(),
+                None => format!("Not on your calendar until you answer{moved}"),
             }
+        };
+        let title = glib::markup_escape_text(&shown.title);
+        let title = if change.cancelled {
+            format!("<s>{title}</s>")
+        } else {
+            title.to_string()
         };
         let info = gtk::Label::new(None);
         info.set_xalign(0.0);
         info.set_line_wrap(true);
         info.set_markup(&format!(
-            "<b>{}</b> · {}\n<small>{}</small>",
-            glib::markup_escape_text(&inv.title),
-            glib::markup_escape_text(&format_start(inv.start_ms)),
+            "<b>{title}</b> · {}\n<small>{}</small>",
+            glib::markup_escape_text(&format_start(shown.start_ms)),
             glib::markup_escape_text(&status)
         ));
         card.pack_start(&info, true, true, 0);
-        if !mine && m.id.starts_with('$') {
-            for r in Response::ALL {
-                let b = gtk::Button::with_label(r.label());
-                b.set_sensitive(current != Some(r));
-                let (this, id, inv, sender) =
-                    (self.clone(), m.id.clone(), inv.clone(), m.sender.clone());
-                b.connect_clicked(move |_| this.answer_invite(&id, &sender, &inv, r));
-                card.pack_start(&b, false, false, 0);
+        if !change.cancelled && m.id.starts_with('$') {
+            if mine {
+                let edit = gtk::Button::with_label("Edit…");
+                let (this, id, cur) = (self.clone(), m.id.clone(), shown.clone());
+                edit.connect_clicked(move |_| {
+                    this.calendar_invite_dialog(Some((id.clone(), cur.clone())))
+                });
+                let cancel = gtk::Button::with_label("Cancel event");
+                let (this, id, cur) = (self.clone(), m.id.clone(), shown.clone());
+                cancel.connect_clicked(move |_| this.cancel_invite(&id, &cur));
+                card.pack_start(&edit, false, false, 0);
+                card.pack_start(&cancel, false, false, 0);
+            } else {
+                for r in Response::ALL {
+                    let b = gtk::Button::with_label(r.label());
+                    b.set_sensitive(current != Some(r));
+                    let (this, id, inv, sender) =
+                        (self.clone(), m.id.clone(), shown.clone(), m.sender.clone());
+                    b.connect_clicked(move |_| this.answer_invite(&id, &sender, &inv, r));
+                    card.pack_start(&b, false, false, 0);
+                }
             }
         }
         card.upcast()
+    }
+
+    /// Cancel one of our own invitations after confirming.
+    fn cancel_invite(self: &Rc<Self>, event_id: &str, inv: &msm::calendar::Invite) {
+        let d = gtk::MessageDialog::new(
+            Some(&self.window),
+            gtk::DialogFlags::MODAL,
+            gtk::MessageType::Question,
+            gtk::ButtonsType::None,
+            &format!("Cancel “{}” for everyone in this conversation?", inv.title),
+        );
+        d.add_button("Keep it", gtk::ResponseType::Cancel);
+        d.add_button("Cancel event", gtk::ResponseType::Accept);
+        d.set_default_response(gtk::ResponseType::Cancel);
+        let ok = d.run() == gtk::ResponseType::Accept;
+        d.close();
+        if !ok {
+            return;
+        }
+        let entry = msm::calendar::Entry::Cancel {
+            event_id: event_id.to_owned(),
+        };
+        let _ = self.app.db.note_calendar_change(&self.me(), &entry);
+        self.redraw(false);
+        let (room, this) = (self.room.clone(), self.clone());
+        let (title, id) = (inv.title.clone(), event_id.to_owned());
+        spawn_async(
+            async move {
+                rooms::send_cancel(&room, &title, &id)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            move |res| {
+                if let Err(e) = res {
+                    this.typing.set_text(&format!(
+                        "Cancelled here, but the cancellation was not sent: {e}"
+                    ));
+                }
+            },
+        );
     }
 
     fn answer_invite(
@@ -1043,9 +1132,14 @@ impl ConversationWindow {
         );
     }
 
-    fn calendar_invite_dialog(self: &Rc<Self>) {
+    /// New invitation, or (with `existing`) change one of ours that is already sent.
+    fn calendar_invite_dialog(self: &Rc<Self>, existing: Option<(String, msm::calendar::Invite)>) {
         let d = gtk::Dialog::with_buttons(
-            Some("Calendar invitation"),
+            Some(if existing.is_some() {
+                "Edit invitation"
+            } else {
+                "Calendar invitation"
+            }),
             Some(&self.window),
             gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
             &[
@@ -1076,6 +1170,14 @@ impl ConversationWindow {
         when.pack_start(&time, true, true, 0);
         let desc = gtk::Entry::new();
         desc.set_placeholder_text(Some("Details (optional)"));
+        if let Some((_, inv)) = &existing {
+            title.set_text(&inv.title);
+            desc.set_text(&inv.description);
+            if let Some((d, t)) = msm::calendar::split_local(inv.start_ms) {
+                date.set_text(&d);
+                time.set_text(&t);
+            }
+        }
         let error = gtk::Label::new(None);
         error.set_xalign(0.0);
         for w in [
@@ -1108,6 +1210,29 @@ impl ConversationWindow {
         };
         d.close();
         let Some(invite) = invite else { return };
+        if let Some((event_id, _)) = existing {
+            let entry = msm::calendar::Entry::Update {
+                event_id: event_id.clone(),
+                invite: invite.clone(),
+            };
+            let _ = self.app.db.note_calendar_change(&self.me(), &entry);
+            self.redraw(false);
+            let (room, this) = (self.room.clone(), self.clone());
+            spawn_async(
+                async move {
+                    rooms::send_update(&room, &event_id, &invite)
+                        .await
+                        .map_err(|e| e.to_string())
+                },
+                move |res| {
+                    if let Err(e) = res {
+                        this.typing
+                            .set_text(&format!("Changed here, but the update was not sent: {e}"));
+                    }
+                },
+            );
+            return;
+        }
         let (room, this) = (self.room.clone(), self.clone());
         let inv = invite.clone();
         self.typing.set_text("Sending invitation…");

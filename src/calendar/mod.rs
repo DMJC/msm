@@ -79,6 +79,15 @@ pub enum Entry {
         event_id: String,
         response: Response,
     },
+    /// The organiser changed the title, time or details of an invitation.
+    Update {
+        event_id: String,
+        invite: Invite,
+    },
+    /// The organiser cancelled an invitation.
+    Cancel {
+        event_id: String,
+    },
 }
 
 /// Local date/time text → UTC ms. `date` is `YYYY-MM-DD`, `time` is `HH:MM`.
@@ -89,6 +98,17 @@ pub fn parse_local(date: &str, time: &str) -> Option<u64> {
         LocalResult::Single(dt) | LocalResult::Ambiguous(dt, _) => {
             u64::try_from(dt.timestamp_millis()).ok()
         }
+        LocalResult::None => None,
+    }
+}
+
+/// UTC ms → local (`YYYY-MM-DD`, `HH:MM`), the inverse of [`parse_local`].
+pub fn split_local(ms: u64) -> Option<(String, String)> {
+    match Local.timestamp_millis_opt(ms as i64) {
+        LocalResult::Single(dt) | LocalResult::Ambiguous(dt, _) => Some((
+            dt.format("%Y-%m-%d").to_string(),
+            dt.format("%H:%M").to_string(),
+        )),
         LocalResult::None => None,
     }
 }
@@ -139,27 +159,60 @@ pub fn rsvp_content(title: &str, event_id: &str, response: Response) -> Value {
     })
 }
 
+/// Message content changing invitation `event_id` (only honoured from its organiser).
+pub fn update_content(event_id: &str, inv: &Invite) -> Value {
+    json!({
+        "msgtype": "m.text",
+        "body": format!("📅 Updated: {} — {}", inv.title, format_start(inv.start_ms)),
+        KEY: {
+            "kind": "update",
+            "event_id": event_id,
+            "title": inv.title,
+            "start_ms": inv.start_ms,
+            "description": inv.description,
+        }
+    })
+}
+
+/// Message content cancelling invitation `event_id` (only honoured from its organiser).
+pub fn cancel_content(title: &str, event_id: &str) -> Value {
+    json!({
+        "msgtype": "m.text",
+        "body": format!("📅 Cancelled: {title}"),
+        KEY: { "kind": "cancel", "event_id": event_id }
+    })
+}
+
+fn parse_invite(c: &Value) -> Option<Invite> {
+    let title = c.get("title")?.as_str()?.trim();
+    if title.is_empty() {
+        return None;
+    }
+    Some(Invite {
+        title: title.chars().take(200).collect(),
+        start_ms: c.get("start_ms")?.as_u64()?,
+        description: c
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .chars()
+            .take(2000)
+            .collect(),
+    })
+}
+
 /// Read the structured field out of a message's `content`.
 pub fn parse(content: &Value) -> Option<Entry> {
     let c = content.get(KEY)?;
     match c.get("kind")?.as_str()? {
-        "invite" => {
-            let title = c.get("title")?.as_str()?.trim();
-            if title.is_empty() {
-                return None;
-            }
-            Some(Entry::Invite(Invite {
-                title: title.chars().take(200).collect(),
-                start_ms: c.get("start_ms")?.as_u64()?,
-                description: c
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .chars()
-                    .take(2000)
-                    .collect(),
-            }))
-        }
+        "invite" => parse_invite(c).map(Entry::Invite),
+        "update" => Some(Entry::Update {
+            event_id: c.get("event_id")?.as_str()?.to_owned(),
+            invite: parse_invite(c)?,
+        }),
+        "cancel" => Some(Entry::Cancel {
+            event_id: c.get("event_id")?.as_str()?.to_owned(),
+        }),
         "rsvp" => Some(Entry::Rsvp {
             event_id: c.get("event_id")?.as_str()?.to_owned(),
             response: Response::from_key(c.get("response")?.as_str()?)?,
@@ -203,6 +256,31 @@ mod tests {
     }
 
     #[test]
+    fn update_and_cancel_round_trip() {
+        let mut changed = invite();
+        changed.start_ms += 3_600_000;
+        assert_eq!(
+            parse(&update_content("$abc", &changed)),
+            Some(Entry::Update {
+                event_id: "$abc".into(),
+                invite: changed
+            })
+        );
+        let c = cancel_content("Lunch", "$abc");
+        assert!(c["body"].as_str().unwrap().contains("Cancelled"));
+        assert_eq!(
+            parse(&c),
+            Some(Entry::Cancel {
+                event_id: "$abc".into()
+            })
+        );
+        assert_eq!(
+            parse(&json!({KEY: {"kind":"update","event_id":"$a","title":"","start_ms":1}})),
+            None
+        );
+    }
+
+    #[test]
     fn malformed_or_foreign_content_is_ignored() {
         assert_eq!(parse(&json!({"msgtype":"m.text","body":"hi"})), None);
         assert_eq!(
@@ -226,6 +304,7 @@ mod tests {
         assert!(parse_local("2026-10-21", "25:00").is_none());
         assert!(parse_local("tomorrow", "10:00").is_none());
         let ms = parse_local("2026-10-21", "14:30").unwrap();
+        assert_eq!(split_local(ms), Some(("2026-10-21".into(), "14:30".into())));
         assert!(format_start(ms).ends_with("14:30"));
     }
 

@@ -214,7 +214,7 @@ UI is still a placeholder window.
 Everything feasible without a real desktop panel, a camera, or a Windows machine is done and verified (see the Session 17 addenda). What is left needs something this environment lacks:
 1. On a real Wayland/X11 desktop with a tray: confirm hide-to-tray on a real close click and that the installed .desktop icon shows on the panel (TODO.md Platform section).
 2. Install the built .deb/.rpm (`scripts/build-packages.sh`) on a clean Debian/Fedora system; run the CI workflow once a remote exists.
-3. Optional features: in-app audio/video playback, voice/video calls, download progress, Windows build, calendar extras (recurrence, edit/cancel, sync across installations).
+3. Optional features: in-app audio/video playback, voice/video calls, download progress, Windows build, calendar extras (recurrence, sync across installations).
 4. Re-run the three-account scenario with Element in the same session if desired.
 5. Try QR verification against a real client: `cargo run --example scan_qr` while showing Element's verification QR to the camera, and have Element scan msm's code (set `MSM_CAMERA` if /dev/video0 is wrong).
 
@@ -304,3 +304,9 @@ Everything feasible without a real desktop panel, a camera, or a Windows machine
 - SDK behaviour (not a bug here): the trusted device cannot send a self-verification request to a not-yet-signed new device; the new device must start it. The dialog says so.
 - Verified (full suite: 69 unit + 4 bin + 26 integration pass, clippy clean): camera unit tests, integration tests (QR between two users, emoji started by the accepting device in both directions, emoji and mismatch), `camera_delivers_frames` (ignored; needs a webcam) with the real Logitech BRIO, and a two-instance GUI run (QR rendered on both, screenshot of the on-screen code decodes to a `MATRIX` payload, emoji started from the accepting device, both ended "Verified").
 - Not verified: scanning with a phone or Element, and a live scan of a code through the real camera (the room was dark and nothing was held up).
+
+## Session 18 addendum: calendar edit and cancel
+- New message kinds `update` and `cancel` (same `com.matrixmessenger.calendar.v1` field, readable `m.text` body). Migration 4 `calendar_changes`; `Database::note_calendar_change` records them and `calendar_change`/`calendar_entries` apply them only when the change's sender is the invitation's own sender (a forged cancel from someone else is ignored).
+- Applied live in `App::on_live_event` (conversation closed or not) and on every redraw of a conversation (history). Invite card shows the latest title/time, "Cancelled by the organiser" (struck through, no answer buttons) and, for the organiser, Edit… (prefilled dialog) and Cancel event (confirmation).
+- Verified: unit tests (round trips, forged change ignored, rescheduled/cancelled entries on the calendar) and the encrypted-room integration test (update, forged cancel by Bob, real cancel). Full suite: 71 unit + 4 bin + 26 integration pass, clippy clean. The Edit…/Cancel event buttons were not exercised in the GUI.
+- Not done: recurrence, reminders, answers to a rescheduled event are not reset, sync of the calendar across installations.

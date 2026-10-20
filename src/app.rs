@@ -840,6 +840,14 @@ impl App {
                         ui::main_window::refresh(self);
                     }
                 }
+                // An organiser's reschedule/cancel applies to the calendar even when this
+                // conversation is closed.
+                if let Parsed::Message(m) = &*event
+                    && !m.redacted
+                    && let Some(e) = m.calendar.as_deref()
+                {
+                    let _ = self.db.note_calendar_change(&m.sender, e);
+                }
                 if let Some(w) = window {
                     w.on_event(*event);
                 }

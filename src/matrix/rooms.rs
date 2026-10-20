@@ -500,6 +500,32 @@ pub async fn send_rsvp(
     Ok(())
 }
 
+/// Tell the room that invitation `event_id` now has these details.
+pub async fn send_update(
+    room: &Room,
+    event_id: &str,
+    invite: &crate::calendar::Invite,
+) -> Result<(), RoomError> {
+    room.send_raw(
+        "m.room.message",
+        crate::calendar::update_content(event_id, invite),
+    )
+    .await
+    .map_err(mx)?;
+    Ok(())
+}
+
+/// Tell the room that invitation `event_id` (titled `title`) is cancelled.
+pub async fn send_cancel(room: &Room, title: &str, event_id: &str) -> Result<(), RoomError> {
+    room.send_raw(
+        "m.room.message",
+        crate::calendar::cancel_content(title, event_id),
+    )
+    .await
+    .map_err(mx)?;
+    Ok(())
+}
+
 /// Replace the text of one of our own messages (an `m.replace` edit).
 pub async fn send_edit(
     room: &Room,

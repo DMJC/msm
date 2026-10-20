@@ -45,4 +45,15 @@ pub const MIGRATIONS: &[&str] = &[
         description TEXT NOT NULL DEFAULT '',
         response TEXT NOT NULL
      );",
+    // 4: organiser changes (reschedule / cancel) to invitations; honoured only when `sender`
+    // is the invitation's own sender, which is checked when reading
+    "CREATE TABLE calendar_changes (
+        event_id TEXT NOT NULL,
+        sender TEXT NOT NULL,
+        cancelled INTEGER NOT NULL DEFAULT 0,
+        title TEXT,
+        start_ms INTEGER,
+        description TEXT,
+        PRIMARY KEY (event_id, sender)
+     );",
 ];

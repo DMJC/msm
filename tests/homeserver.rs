@@ -1903,4 +1903,53 @@ async fn calendar_invitation_and_rsvp_cross_an_encrypted_room() {
         })
         .expect("answer arrived");
     assert_eq!(answer, ("@bob:localhost".to_owned(), Response::Tentative));
+
+    // The organiser reschedules, then cancels; Bob's calendar follows, a forged change from
+    // Bob does not touch Alice's own event.
+    let moved = Invite {
+        start_ms: invite.start_ms + 2 * 3_600_000,
+        ..invite.clone()
+    };
+    rooms::send_update(&room, &invite_id, &moved).await.unwrap();
+    rooms::send_cancel(&broom, "Lunch", &invite_id)
+        .await
+        .unwrap(); // not the organiser
+    sync_a_bit(&bob).await;
+    sync_a_bit(&alice).await;
+    let db = msm::storage::database::Database::open_in_memory().unwrap();
+    let save = |db: &msm::storage::database::Database, sender: &str| {
+        db.save_calendar_entry(&msm::storage::database::CalendarEntry {
+            event_id: invite_id.clone(),
+            room_id: room.room_id().to_string(),
+            sender: sender.to_owned(),
+            title: invite.title.clone(),
+            start_ms: invite.start_ms,
+            description: invite.description.clone(),
+            response: Response::Accepted,
+        })
+        .unwrap();
+    };
+    save(&db, "@alice:localhost");
+    for m in history_of(&broom).await.messages() {
+        if let Some(e) = m.calendar.as_deref() {
+            db.note_calendar_change(&m.sender, e).unwrap();
+        }
+    }
+    let on_calendar = db.calendar_entries().unwrap();
+    assert_eq!(on_calendar.len(), 1, "Bob's forged cancel is ignored");
+    assert_eq!(on_calendar[0].start_ms, moved.start_ms);
+
+    rooms::send_cancel(&room, "Lunch", &invite_id)
+        .await
+        .unwrap();
+    sync_a_bit(&bob).await;
+    for m in history_of(&broom).await.messages() {
+        if let Some(e) = m.calendar.as_deref() {
+            db.note_calendar_change(&m.sender, e).unwrap();
+        }
+    }
+    assert!(
+        db.calendar_entries().unwrap().is_empty(),
+        "the organiser's cancel applies"
+    );
 }
