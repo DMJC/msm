@@ -13,19 +13,23 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Interactive emoji (SAS) verification of other users and of our own devices.
+//! Interactive verification (emoji comparison or QR scanning) of other users and
+//! of our own devices.
 //!
 //! [`run`] drives one verification request and reports what the UI should show;
-//! the UI answers with [`VerifyCmd`]. Only the person comparing the emoji can
-//! confirm a match: nothing here confirms on their behalf.
+//! the UI answers with [`VerifyCmd`]. Only a person can confirm a match (emoji
+//! comparison, or that the other side really scanned our QR code): nothing here
+//! confirms on their behalf.
 
 use futures_util::StreamExt;
 use matrix_sdk::Client;
 use matrix_sdk::encryption::verification::SasState;
 use matrix_sdk::encryption::verification::{
-    SasVerification, Verification, VerificationRequest, VerificationRequestState,
+    QrVerification, QrVerificationData, QrVerificationState, SasVerification, Verification,
+    VerificationRequest, VerificationRequestState,
 };
 use matrix_sdk::ruma::UserId;
+use matrix_sdk::ruma::events::key::verification::VerificationMethod;
 use matrix_sdk::ruma::events::key::verification::request::ToDeviceKeyVerificationRequestEvent;
 use matrix_sdk::ruma::events::room::message::{MessageType, OriginalSyncRoomMessageEvent};
 use thiserror::Error;
@@ -52,8 +56,15 @@ pub enum VerifyUi {
     Waiting,
     /// They asked; waiting for us to accept or decline.
     Requested,
+    /// Both sides agreed to verify: offer our QR code (if one can be made, as a
+    /// grid of dark modules) to be scanned, scanning theirs, or comparing emoji.
+    Ready {
+        qr: Option<Vec<Vec<bool>>>,
+    },
     /// Starting the emoji exchange.
     Starting,
+    /// They scanned our QR code. Confirm only if they really did.
+    QrScanned,
     /// Compare these (symbol, name) pairs with the other side.
     Emojis(Vec<(String, String)>),
     /// We confirmed; waiting for the other side.
@@ -62,9 +73,13 @@ pub enum VerifyUi {
     Cancelled(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerifyCmd {
     Accept,
+    /// Compare emoji instead of scanning.
+    StartEmoji,
+    /// The raw payload of a QR code read from their screen.
+    ScanQr(Vec<u8>),
     Match,
     Mismatch,
     Cancel,
@@ -78,6 +93,30 @@ pub struct Flow {
     pub cmd: mpsc::UnboundedSender<VerifyCmd>,
 }
 
+/// The SDK's default does not offer scanning, so say what we can do: show and
+/// scan QR codes (the camera is optional at the UI) and compare emoji.
+fn methods() -> Vec<VerificationMethod> {
+    vec![
+        VerificationMethod::SasV1,
+        VerificationMethod::QrCodeShowV1,
+        VerificationMethod::QrCodeScanV1,
+        VerificationMethod::ReciprocateV1,
+    ]
+}
+
+/// Dark modules of `qr`, row by row, with no quiet zone.
+fn qr_grid(qr: &QrVerification) -> Option<Vec<Vec<bool>>> {
+    let code = qr.to_qr_code().ok()?;
+    let w = code.width();
+    let colors = code.to_colors();
+    Some(
+        colors
+            .chunks(w)
+            .map(|row| row.iter().map(|c| *c == qrcode::Color::Dark).collect())
+            .collect(),
+    )
+}
+
 /// Ask `mxid` (or ourselves, to verify another of our devices) to verify.
 pub async fn request(client: &Client, mxid: &str) -> Result<VerificationRequest, VerifyError> {
     let id = UserId::parse(mxid).map_err(mx)?;
@@ -87,7 +126,7 @@ pub async fn request(client: &Client, mxid: &str) -> Result<VerificationRequest,
         .await
         .map_err(mx)?
         .ok_or_else(|| VerifyError::NoIdentity(mxid.to_owned()))?
-        .request_verification()
+        .request_verification_with_methods(methods())
         .await
         .map_err(mx)
 }
@@ -119,6 +158,14 @@ async fn find_request(
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
     None
+}
+
+/// A request from one of our own devices is only actionable if we already know that
+/// device, which a client that was offline when it signed in may not.
+pub async fn refresh_own_devices(client: &Client) {
+    if let Some(me) = client.user_id() {
+        let _ = client.encryption().request_user_identity(me).await;
+    }
 }
 
 /// Forward incoming verification requests (to-device and in-room) to `tx`.
@@ -159,18 +206,49 @@ pub fn run(request: VerificationRequest) -> Flow {
         cmd: cmd_tx,
     };
     let sas_slot: std::sync::Arc<tokio::sync::Mutex<Option<SasVerification>>> = Default::default();
+    let qr_slot: std::sync::Arc<tokio::sync::Mutex<Option<QrVerification>>> = Default::default();
+    let ui_tx_cmd = ui_tx.clone();
 
     // Commands from the UI.
-    let (req, slot) = (request.clone(), sas_slot.clone());
+    let (req, slot, qslot) = (request.clone(), sas_slot.clone(), qr_slot.clone());
     tokio::spawn(async move {
         while let Some(cmd) = cmd_rx.recv().await {
             let sas = slot.lock().await.clone();
-            let _ = match (cmd, sas) {
-                (VerifyCmd::Accept, _) => req.accept().await,
-                (VerifyCmd::Match, Some(s)) => s.confirm().await,
-                (VerifyCmd::Mismatch, Some(s)) => s.mismatch().await,
-                (VerifyCmd::Cancel, Some(s)) => s.cancel().await,
-                (VerifyCmd::Cancel, None) => req.cancel().await,
+            let qr = qslot.lock().await.clone();
+            let _ = match (cmd, sas, qr) {
+                (VerifyCmd::Accept, ..) => req.accept_with_methods(methods()).await,
+                (VerifyCmd::StartEmoji, ..) => req.start_sas().await.map(|_| ()),
+                (VerifyCmd::ScanQr(bytes), ..) => {
+                    match QrVerificationData::from_bytes(bytes) {
+                        Ok(data) => match req.scan_qr_code(data).await {
+                            Ok(Some(qr)) => {
+                                *qslot.lock().await = Some(qr.clone());
+                                tokio::spawn(follow_qr(qr, ui_tx_cmd.clone()));
+                            }
+                            Ok(None) => {
+                                let _ = ui_tx_cmd.send(VerifyUi::Cancelled(
+                                    "that QR code cannot be used for this verification".into(),
+                                ));
+                            }
+                            Err(e) => {
+                                let _ = ui_tx_cmd.send(VerifyUi::Cancelled(e.to_string()));
+                            }
+                        },
+                        Err(_) => {
+                            let _ = ui_tx_cmd
+                                .send(VerifyUi::Cancelled("that is not a Matrix QR code".into()));
+                        }
+                    }
+                    Ok(())
+                }
+                // "They scanned me" takes precedence: it is the only time a QR waits on us.
+                (VerifyCmd::Match, _, Some(q)) if q.has_been_scanned() => q.confirm().await,
+                (VerifyCmd::Match, Some(s), _) => s.confirm().await,
+                (VerifyCmd::Mismatch, _, Some(q)) if q.has_been_scanned() => q.cancel().await,
+                (VerifyCmd::Mismatch, Some(s), _) => s.mismatch().await,
+                (VerifyCmd::Cancel, _, Some(q)) => q.cancel().await,
+                (VerifyCmd::Cancel, Some(s), _) => s.cancel().await,
+                (VerifyCmd::Cancel, None, None) => req.cancel().await,
                 _ => Ok(()),
             };
         }
@@ -189,17 +267,34 @@ pub fn run(request: VerificationRequest) -> Flow {
                     let _ = ui_tx.send(VerifyUi::Requested);
                 }
                 VerificationRequestState::Ready { .. } => {
-                    let _ = ui_tx.send(VerifyUi::Starting);
-                    if request.we_started() {
-                        let _ = request.start_sas().await;
+                    // A second QR object for the same flow makes the SDK cancel both, so
+                    // generate once and reuse it if this state is reported again.
+                    let mut slot = qr_slot.lock().await;
+                    if slot.is_none()
+                        && let Ok(Some(qr)) = request.generate_qr_code().await
+                    {
+                        tokio::spawn(follow_qr(qr.clone(), ui_tx.clone()));
+                        *slot = Some(qr);
                     }
+                    let grid = slot.as_ref().and_then(qr_grid);
+                    drop(slot);
+                    let _ = ui_tx.send(VerifyUi::Ready { qr: grid });
                 }
-                VerificationRequestState::Transitioned { verification } => {
-                    if let Verification::SasV1(sas) = verification {
+                VerificationRequestState::Transitioned { verification } => match verification {
+                    Verification::SasV1(sas) => {
+                        let _ = ui_tx.send(VerifyUi::Starting);
                         *sas_slot.lock().await = Some(sas.clone());
                         tokio::spawn(follow_sas(sas, ui_tx.clone()));
                     }
-                }
+                    Verification::QrV1(qr) => {
+                        let mut slot = qr_slot.lock().await;
+                        if slot.is_none() {
+                            *slot = Some(qr.clone());
+                            tokio::spawn(follow_qr(qr, ui_tx.clone()));
+                        }
+                    }
+                    _ => {}
+                },
                 VerificationRequestState::Done => {
                     let _ = ui_tx.send(VerifyUi::Done);
                     return;
@@ -219,10 +314,10 @@ pub fn run(request: VerificationRequest) -> Flow {
 }
 
 async fn follow_sas(sas: SasVerification, ui: mpsc::UnboundedSender<VerifyUi>) {
-    // The side that did not start the flow must accept it.
-    if !sas.we_started() {
-        let _ = sas.accept().await;
-    }
+    // The side that received the SAS start must accept it. `we_started` follows the
+    // request, not the SAS, so when the accepting device picks emoji it is wrong on
+    // both sides; accepting is a no-op for the side that sent the start.
+    let _ = sas.accept().await;
     let mut changes = sas.changes();
     while let Some(state) = changes.next().await {
         match state {
@@ -241,6 +336,24 @@ async fn follow_sas(sas: SasVerification, ui: mpsc::UnboundedSender<VerifyUi>) {
             }
             // The request stream reports Done/Cancelled for the whole flow.
             SasState::Done { .. } | SasState::Cancelled(_) => return,
+            _ => {}
+        }
+    }
+}
+
+async fn follow_qr(qr: QrVerification, ui: mpsc::UnboundedSender<VerifyUi>) {
+    let mut changes = qr.changes();
+    while let Some(state) = changes.next().await {
+        match state {
+            QrVerificationState::Scanned => {
+                let _ = ui.send(VerifyUi::QrScanned);
+            }
+            // We scanned theirs (Reciprocated) or confirmed their scan: now they decide.
+            QrVerificationState::Reciprocated | QrVerificationState::Confirmed => {
+                let _ = ui.send(VerifyUi::Confirmed);
+            }
+            // The request stream reports Done/Cancelled for the whole flow.
+            QrVerificationState::Done { .. } | QrVerificationState::Cancelled(_) => return,
             _ => {}
         }
     }

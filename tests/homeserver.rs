@@ -992,6 +992,8 @@ async fn emoji_verification_between_two_users() {
     assert!(!bf.self_verification);
     next_ui(&mut bf, |u| *u == VerifyUi::Requested).await;
     bf.cmd.send(VerifyCmd::Accept).unwrap();
+    next_ui(&mut af, |u| matches!(u, VerifyUi::Ready { .. })).await;
+    af.cmd.send(VerifyCmd::StartEmoji).unwrap();
 
     let VerifyUi::Emojis(ea) = next_ui(&mut af, |u| matches!(u, VerifyUi::Emojis(_))).await else {
         unreachable!()
@@ -1030,6 +1032,216 @@ async fn emoji_verification_between_two_users() {
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     assert!(trusted, "alice now trusts bob");
+}
+
+/// Paint a QR grid into a 640x480 grayscale frame, as a camera pointed at a screen would see it.
+fn frame_from_grid(grid: &[Vec<bool>]) -> Vec<u8> {
+    let (w, h, scale) = (640usize, 480usize, 8usize);
+    let n = grid.len();
+    let (ox, oy) = ((w - n * scale) / 2, (h - n * scale) / 2);
+    let mut f = vec![255u8; w * h];
+    for (y, row) in grid.iter().enumerate() {
+        for (x, dark) in row.iter().enumerate() {
+            if *dark {
+                for dy in 0..scale {
+                    for dx in 0..scale {
+                        f[(oy + y * scale + dy) * w + ox + x * scale + dx] = 0;
+                    }
+                }
+            }
+        }
+    }
+    f
+}
+
+#[tokio::test]
+async fn qr_verification_between_two_users() {
+    use msm::matrix::encryption;
+    use msm::matrix::verification::{self, VerifyCmd, VerifyUi};
+    let Some(hs) = homeserver() else { return };
+    let (alice, _, apw) = register_fresh(&hs).await;
+    let (bob, _, bpw) = register_fresh(&hs).await;
+    encryption::setup_recovery(&alice, &apw).await.unwrap();
+    encryption::setup_recovery(&bob, &bpw).await.unwrap();
+    let bob_id = bob.user_id().unwrap().to_string();
+    let (tx, rx) = async_channel::unbounded();
+    verification::watch_incoming(&bob, tx);
+    for c in [&alice, &bob] {
+        let c = c.clone();
+        tokio::spawn(async move {
+            let _ = c.sync(SyncSettings::default()).await;
+        });
+    }
+    let b2 = bob.clone();
+    tokio::spawn(async move {
+        loop {
+            for r in b2.invited_rooms() {
+                let _ = r.join().await;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    });
+    bob.encryption()
+        .request_user_identity(alice.user_id().unwrap())
+        .await
+        .unwrap();
+    let mut af = verification::run(verification::request(&alice, &bob_id).await.unwrap());
+    let incoming = tokio::time::timeout(Duration::from_secs(60), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut bf = verification::run(incoming);
+    next_ui(&mut bf, |u| *u == VerifyUi::Requested).await;
+    bf.cmd.send(VerifyCmd::Accept).unwrap();
+
+    let VerifyUi::Ready {
+        qr: Some(alice_grid),
+    } = next_ui(&mut af, |u| matches!(u, VerifyUi::Ready { .. })).await
+    else {
+        panic!("alice should be offered a QR code")
+    };
+    next_ui(&mut bf, |u| matches!(u, VerifyUi::Ready { .. })).await;
+
+    // Bob "points the camera" at Alice's code: grid -> frame -> decoder -> scan.
+    let frame = frame_from_grid(&alice_grid);
+    let payload = msm::camera::decode_frame(640, 480, &frame).expect("code is readable");
+    // Nothing is verified by merely scanning.
+    bf.cmd.send(VerifyCmd::ScanQr(payload)).unwrap();
+    next_ui(&mut af, |u| *u == VerifyUi::QrScanned).await;
+    let id = bob
+        .encryption()
+        .get_user_identity(alice.user_id().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!id.is_verified(), "scanning alone verifies nothing");
+
+    // Alice confirms that Bob scanned it; both finish.
+    af.cmd.send(VerifyCmd::Match).unwrap();
+    next_ui(&mut af, |u| *u == VerifyUi::Done).await;
+    next_ui(&mut bf, |u| *u == VerifyUi::Done).await;
+    let mut trusted = false;
+    for _ in 0..40 {
+        let id = bob
+            .encryption()
+            .get_user_identity(alice.user_id().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        if id.is_verified() {
+            trusted = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(trusted, "bob now trusts alice");
+}
+
+/// The device that accepted a request may be the one that picks emoji.
+#[tokio::test]
+async fn self_verification_emoji_started_by_the_accepting_device() {
+    use msm::matrix::encryption;
+    use msm::matrix::verification::{self, VerifyCmd, VerifyUi};
+    let Some(hs) = homeserver() else { return };
+    let (old, name, pw) = register_fresh(&hs).await;
+    encryption::setup_recovery(&old, &pw).await.unwrap();
+    let new = login_as_with(&hs, &name, &pw, "selfv-new").await;
+    let (tx, rx) = async_channel::unbounded();
+    verification::watch_incoming(&old, tx);
+    for c in [&old, &new] {
+        let c = c.clone();
+        tokio::spawn(async move {
+            let _ = c.sync(SyncSettings::default()).await;
+        });
+    }
+    // The old device can only act on a request from a device whose keys it already knows.
+    let new_id = new.device_id().unwrap().to_owned();
+    let me = old.user_id().unwrap().to_owned();
+    let mut known = false;
+    for _ in 0..60 {
+        let _ = old.encryption().request_user_identity(&me).await;
+        if old
+            .encryption()
+            .get_device(&me, &new_id)
+            .await
+            .unwrap()
+            .is_some()
+        {
+            known = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(known, "old device learns about the new one");
+    let mut nf = verification::run(verification::request_self(&new).await.unwrap());
+    let incoming = tokio::time::timeout(Duration::from_secs(60), rx.recv())
+        .await
+        .expect("the old device sees the request")
+        .unwrap();
+    let mut of = verification::run(incoming);
+    assert!(of.self_verification);
+    next_ui(&mut of, |u| *u == VerifyUi::Requested).await;
+    of.cmd.send(VerifyCmd::Accept).unwrap();
+    next_ui(&mut nf, |u| matches!(u, VerifyUi::Ready { .. })).await;
+    next_ui(&mut of, |u| matches!(u, VerifyUi::Ready { .. })).await;
+    of.cmd.send(VerifyCmd::StartEmoji).unwrap();
+    let VerifyUi::Emojis(a) = next_ui(&mut of, |u| matches!(u, VerifyUi::Emojis(_))).await else {
+        unreachable!()
+    };
+    let VerifyUi::Emojis(b) = next_ui(&mut nf, |u| matches!(u, VerifyUi::Emojis(_))).await else {
+        unreachable!()
+    };
+    assert_eq!(a, b);
+}
+
+/// The trusted device asks the brand-new one to verify (the new device only accepts).
+#[tokio::test]
+async fn self_verification_requested_by_the_trusted_device() {
+    use msm::matrix::encryption;
+    use msm::matrix::verification::{self, VerifyCmd, VerifyUi};
+    let Some(hs) = homeserver() else { return };
+    let (old, name, pw) = register_fresh(&hs).await;
+    encryption::setup_recovery(&old, &pw).await.unwrap();
+    let new = login_as_with(&hs, &name, &pw, "selfv-new2").await;
+    let (tx, rx) = async_channel::unbounded();
+    verification::watch_incoming(&new, tx);
+    for c in [&old, &new] {
+        let c = c.clone();
+        tokio::spawn(async move {
+            let _ = c.sync(SyncSettings::default()).await;
+        });
+    }
+    let new_id = new.device_id().unwrap().to_owned();
+    let me = old.user_id().unwrap().to_owned();
+    let mut known = false;
+    for _ in 0..60 {
+        let _ = old.encryption().request_user_identity(&me).await;
+        if old
+            .encryption()
+            .get_device(&me, &new_id)
+            .await
+            .unwrap()
+            .is_some()
+        {
+            known = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    assert!(known);
+    let mut of = verification::run(verification::request_self(&old).await.unwrap());
+    let incoming = tokio::time::timeout(Duration::from_secs(30), rx.recv())
+        .await
+        .expect("the new device sees the request")
+        .unwrap();
+    let mut nf = verification::run(incoming);
+    next_ui(&mut nf, |u| *u == VerifyUi::Requested).await;
+    nf.cmd.send(VerifyCmd::Accept).unwrap();
+    next_ui(&mut of, |u| matches!(u, VerifyUi::Ready { .. })).await;
+    next_ui(&mut nf, |u| matches!(u, VerifyUi::Ready { .. })).await;
+    nf.cmd.send(VerifyCmd::StartEmoji).unwrap();
+    next_ui(&mut nf, |u| matches!(u, VerifyUi::Emojis(_))).await;
+    next_ui(&mut of, |u| matches!(u, VerifyUi::Emojis(_))).await;
 }
 
 #[tokio::test]
@@ -1072,6 +1284,8 @@ async fn emoji_mismatch_cancels_without_verifying() {
     let mut bf = verification::run(incoming);
     next_ui(&mut bf, |u| *u == VerifyUi::Requested).await;
     bf.cmd.send(VerifyCmd::Accept).unwrap();
+    next_ui(&mut af, |u| matches!(u, VerifyUi::Ready { .. })).await;
+    af.cmd.send(VerifyCmd::StartEmoji).unwrap();
     next_ui(&mut af, |u| matches!(u, VerifyUi::Emojis(_))).await;
     next_ui(&mut bf, |u| matches!(u, VerifyUi::Emojis(_))).await;
     af.cmd.send(VerifyCmd::Mismatch).unwrap();

@@ -229,6 +229,11 @@ impl App {
         // Incoming verification requests open the verification window.
         let (vtx, vrx) = async_channel::unbounded();
         msm::matrix::verification::watch_incoming(&client, vtx);
+        let c = client.clone();
+        spawn_async(
+            async move { msm::matrix::verification::refresh_own_devices(&c).await },
+            |_| {},
+        );
         let app = self.clone();
         glib::MainContext::default().spawn_local(async move {
             while let Ok(req) = vrx.recv().await {

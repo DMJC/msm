@@ -15,14 +15,16 @@ getrandom = "0.4.3"
 gtk = "0.19"
 ksni = "0.3.6"
 libc = "0.2.191"
-matrix-sdk = "0.19"
+matrix-sdk = { version = "0.19", features = ["qrcode"] }
 mime_guess = "2.0.5"
 oo7 = { version = "0.6.0", default-features = false, features = ["tokio", "native_crypto"] }
+qrcode = { version = "0.14.1", default-features = false }
+rqrr = "0.11.0"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2.0.21"
-tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 url = "2.5.8"
@@ -40,7 +42,7 @@ extended-description = "An MSN-Messenger-style desktop client for Matrix (GTK3, 
 section = "net"
 priority = "optional"
 depends = "$auto"
-recommends = "gnome-keyring | kwalletd5 | kwalletd6"
+recommends = "gnome-keyring | kwalletd5 | kwalletd6, ffmpeg"
 assets = [
     ["target/release/msm", "usr/bin/", "755"],
     ["data/com.matrixmessenger.Msm.desktop", "usr/share/applications/", "644"],

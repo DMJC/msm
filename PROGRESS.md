@@ -199,7 +199,7 @@ UI is still a placeholder window.
 ## Known problems / not verified
 - Verification needs both sides to already know each other's keys (e.g. a shared room) and the peer to have accepted the DM. The green ✔ states are not GUI-verified.
 - The verification-request message in the DM counts as an unread message. This comes from the SDK's client-side unread count (any `m.room.message` from another user counts) and the server's count; not fixed.
-- QR-code verification and verifying with a recovery key from a new device UI are not implemented.
+- Verifying with a recovery key from a new device UI exists (Security → Enter recovery key).
 - Search filters loaded messages as you type; Enter pages back through up to 30 pages of history (client-side, so encrypted rooms work); replies to unloaded messages show "an earlier message"; jump-to-original works only for loaded messages.
 - Other users' avatar changes are now noticed live (Session 17: member-event watcher drops the cached avatar; integration test only, not seen in the GUI);  no avatar zoom/preview.
 - Image previews decode untrusted data with gdk-pixbuf (size-limited, failures ignored); "Open" hands files to the default application, as other clients do.
@@ -214,8 +214,9 @@ UI is still a placeholder window.
 Everything feasible without a real desktop panel, a camera, or a Windows machine is done and verified (see the Session 17 addenda). What is left needs something this environment lacks:
 1. On a real Wayland/X11 desktop with a tray: confirm hide-to-tray on a real close click and that the installed .desktop icon shows on the panel (TODO.md Platform section).
 2. Install the built .deb/.rpm (`scripts/build-packages.sh`) on a clean Debian/Fedora system; run the CI workflow once a remote exists.
-3. Optional features: QR verification (needs a camera/scanner), in-app audio/video playback, voice/video calls, download progress, Windows build, calendar extras (recurrence, edit/cancel, sync across installations).
+3. Optional features: in-app audio/video playback, voice/video calls, download progress, Windows build, calendar extras (recurrence, edit/cancel, sync across installations).
 4. Re-run the three-account scenario with Element in the same session if desired.
+5. Try QR verification against a real client: `cargo run --example scan_qr` while showing Element's verification QR to the camera, and have Element scan msm's code (set `MSM_CAMERA` if /dev/video0 is wrong).
 
 ## Session 17 addendum: invite fix
 - Full suite re-run found `invite_user` failing ("device is not verified") once the invitee had a cross-signing identity (accounts used in the Element SAS runs). Cause: matrix-sdk shares room history before inviting and aborts if this device is not cross-signed. `rooms::invite_user` now falls back to a plain invite request in that case.
@@ -295,3 +296,11 @@ Everything feasible without a real desktop panel, a camera, or a Windows machine
 ## Post-packaging verification (2026-10-21)
 - Full suite re-run against local Synapse after the packaging additions: 66 unit + 4 bin + 23 integration pass, clippy clean.
 - Remaining items are all blocked on hardware/OS access (see "Exact next task").
+
+## Session 18 addendum: QR verification
+- `matrix-sdk` `qrcode` feature, `rqrr` decoder, `qrcode` for the module grid. `src/camera.rs`: frames from `ffmpeg` (V4L2, 640x480 gray, `MSM_CAMERA` overrides the device), `decode_frame` returns the binary payload.
+- `matrix::verification`: the request now advertises SAS + QR show/scan + reciprocate explicitly (the SDK default does not offer scanning). `Ready { qr }` replaces the auto SAS start; `VerifyCmd::{StartEmoji, ScanQr}`; `QrScanned` asks the person to confirm. Dialog draws our code (cairo), has "Scan their QR code" and "Compare emoji instead"; emoji are laid out four per row.
+- Bugs found by the GUI/harness and fixed: generating the QR twice made the SDK cancel both verifications; `we_started` follows the request, so when the accepting device picked emoji nobody accepted the SAS (now accepted unconditionally, a no-op for the sender); a device offline at sign-in may not know the other device (`refresh_own_devices`).
+- SDK behaviour (not a bug here): the trusted device cannot send a self-verification request to a not-yet-signed new device; the new device must start it. The dialog says so.
+- Verified (full suite: 69 unit + 4 bin + 26 integration pass, clippy clean): camera unit tests, integration tests (QR between two users, emoji started by the accepting device in both directions, emoji and mismatch), `camera_delivers_frames` (ignored; needs a webcam) with the real Logitech BRIO, and a two-instance GUI run (QR rendered on both, screenshot of the on-screen code decodes to a `MATRIX` payload, emoji started from the accepting device, both ended "Verified").
+- Not verified: scanning with a phone or Element, and a live scan of a code through the real camera (the room was dark and nothing was held up).

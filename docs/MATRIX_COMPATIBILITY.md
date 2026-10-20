@@ -51,7 +51,7 @@ Per spec an edit is honoured only if it comes from the original message's sender
 Verified between two accounts on Synapse, including that another user's "edit" is ignored.
 
 ## Verification
-Emoji (SAS v1) verification of users and our own devices uses the standard `m.key.verification.*` flow (in-room for users, to-device for own devices), so it interoperates with other clients. Not implemented: QR codes.
+Emoji (SAS v1) verification of users and our own devices uses the standard `m.key.verification.*` flow (in-room for users, to-device for own devices), so it interoperates with other clients. QR codes (`m.qr_code.show.v1`, `m.qr_code.scan.v1`, `m.reciprocate.v1`) are offered alongside emoji; the SDK only sends a self-verification request to devices that are already cross-signed, so a brand-new device must start it.
 
 ## Replies
 Replies use the standard `m.relates_to` / `m.in_reply_to` relation, so other clients show them as replies. We do not add the legacy quoted-text fallback.
@@ -83,4 +83,4 @@ Tested with Element Web 1.12.32 against a local Synapse: DM creation/invite, enc
 Kick, ban, unban and room name/topic use the standard Matrix membership and state events. The UI offers an action only when the room's power levels permit it; the homeserver is the authority. Roles (Member 0, Moderator 50, Admin 100) are changed by updating `m.room.power_levels` users.
 
 ## Not yet implemented
-Custom power-level values, join rules, QR-code verification, audio/video playback, upload progress, server-side message search.
+Custom power-level values, join rules, audio/video playback, upload progress, server-side message search.

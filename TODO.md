@@ -27,6 +27,7 @@
 - [x] Friend requests (to-device protocol; verified vs Synapse + GUI; not vs a second client implementation)
 - [x] Cross-signing + recovery key + key backup (verified vs Synapse and in the GUI)
 - [x] Interactive emoji (SAS) verification (verified vs Synapse + GUI)
+- [x] QR verification: show our code, scan theirs with a webcam (ffmpeg); verified by integration test, real-camera frame test and two-instance GUI; phone/Element scan untested
 - [x] Per-message encryption indicators, verified badges (⚠ path GUI-verified; ✔ path not)
 - [x] Redaction (delete own message), read receipts, unread counts
 - [x] Reactions, sending edits, emoji picker (verified vs Synapse + GUI)
