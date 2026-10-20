@@ -22,8 +22,103 @@ use gtk::glib;
 use gtk::prelude::*;
 use msm::calendar::{Response, format_start};
 
+use msm::calendar::Invite;
+use msm::storage::database::{CalendarEntry, PERSONAL_PREFIX};
+
 use crate::app::App;
 use crate::ui::main_window::error_dialog;
+
+/// Ask for a title, local date/time and details; `None` if cancelled. Used for new
+/// invitations, edits and personal calendar entries.
+pub fn event_form(
+    parent: &gtk::Window,
+    heading: &str,
+    ok_label: &str,
+    existing: Option<&Invite>,
+) -> Option<Invite> {
+    let d = gtk::Dialog::with_buttons(
+        Some(heading),
+        Some(parent),
+        gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
+        &[
+            ("Cancel", gtk::ResponseType::Cancel),
+            (ok_label, gtk::ResponseType::Accept),
+        ],
+    );
+    d.set_default_response(gtk::ResponseType::Accept);
+    let area = d.content_area();
+    area.set_spacing(6);
+    area.set_margin(12);
+    let title = gtk::Entry::new();
+    title.set_placeholder_text(Some("Title"));
+    title.set_activates_default(true);
+    let today = glib::DateTime::now_local()
+        .ok()
+        .and_then(|t| t.format("%Y-%m-%d").ok())
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let date = gtk::Entry::new();
+    date.set_text(&today);
+    date.set_tooltip_text(Some("Date, YYYY-MM-DD (your local time)"));
+    let time = gtk::Entry::new();
+    time.set_text("12:00");
+    time.set_tooltip_text(Some("Time, HH:MM (24-hour, your local time)"));
+    let when = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    when.pack_start(&date, true, true, 0);
+    when.pack_start(&time, true, true, 0);
+    let desc = gtk::Entry::new();
+    desc.set_placeholder_text(Some("Details (optional)"));
+    if let Some(inv) = existing {
+        title.set_text(&inv.title);
+        desc.set_text(&inv.description);
+        if let Some((d, t)) = msm::calendar::split_local(inv.start_ms) {
+            date.set_text(&d);
+            time.set_text(&t);
+        }
+    }
+    let error = gtk::Label::new(None);
+    error.set_xalign(0.0);
+    for w in [
+        title.upcast_ref::<gtk::Widget>(),
+        when.upcast_ref(),
+        desc.upcast_ref(),
+        error.upcast_ref(),
+    ] {
+        area.pack_start(w, false, false, 0);
+    }
+    d.show_all();
+    let invite = loop {
+        if d.run() != gtk::ResponseType::Accept {
+            break None;
+        }
+        let t = title.text().trim().to_owned();
+        if t.is_empty() {
+            error.set_text("Enter a title.");
+            continue;
+        }
+        let Some(start_ms) = msm::calendar::parse_local(&date.text(), &time.text()) else {
+            error.set_text("Use the date as YYYY-MM-DD and the time as HH:MM.");
+            continue;
+        };
+        break Some(Invite {
+            title: t,
+            start_ms,
+            description: desc.text().trim().to_owned(),
+        });
+    };
+    d.close();
+    invite
+}
+
+/// A fresh ID for a personal entry.
+fn new_personal_id() -> String {
+    let mut b = [0u8; 8];
+    let _ = getrandom::fill(&mut b);
+    format!(
+        "{PERSONAL_PREFIX}{}",
+        b.iter().map(|x| format!("{x:02x}")).collect::<String>()
+    )
+}
 
 pub fn open(app: &Rc<App>) {
     let d = gtk::Dialog::with_buttons(
@@ -35,6 +130,12 @@ pub fn open(app: &Rc<App>) {
     d.set_default_size(400, 420);
     let list = gtk::Box::new(gtk::Orientation::Vertical, 6);
     list.set_margin(12);
+    let add = gtk::Button::with_label("Add event…");
+    {
+        let (app, list) = (app.clone(), list.clone());
+        add.connect_clicked(move |_| add_or_edit(&app, &list, None));
+    }
+    d.content_area().pack_start(&add, false, false, 6);
     let scroll = gtk::ScrolledWindow::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
     scroll.add(&list);
     d.content_area().pack_start(&scroll, true, true, 0);
@@ -56,7 +157,7 @@ fn fill(app: &Rc<App>, list: &gtk::Box) {
     };
     if entries.is_empty() {
         let none = gtk::Label::new(Some(
-            "Nothing yet. Invitations appear here once you accept them (or mark them tentative).",
+            "Nothing yet. Add your own event, or accept (or mark tentative) an invitation.",
         ));
         none.set_line_wrap(true);
         none.set_xalign(0.0);
@@ -64,10 +165,15 @@ fn fill(app: &Rc<App>, list: &gtk::Box) {
     }
     let me = app.own_id().unwrap_or_default();
     for e in entries {
-        let who = if e.sender == me {
-            "you".to_owned()
+        let who = if e.event_id.starts_with(PERSONAL_PREFIX) {
+            "personal".to_owned()
+        } else if e.sender == me {
+            "from you".to_owned()
         } else {
-            app.mgr.borrow().resolver().resolve(&e.sender, None)
+            format!(
+                "from {}",
+                app.mgr.borrow().resolver().resolve(&e.sender, None)
+            )
         };
         let tag = match e.response {
             Response::Tentative => " · <i>tentative</i>",
@@ -85,11 +191,12 @@ fn fill(app: &Rc<App>, list: &gtk::Box) {
             )
         };
         label.set_markup(&format!(
-            "<b>{}</b>{tag}\n{} · from {}{details}",
+            "<b>{}</b>{tag}\n{} · {}{details}",
             glib::markup_escape_text(&e.title),
             glib::markup_escape_text(&format_start(e.start_ms)),
             glib::markup_escape_text(&who)
         ));
+        let personal = e.event_id.starts_with(PERSONAL_PREFIX);
         let remove = gtk::Button::with_label("Remove");
         let (a, l, id) = (app.clone(), list.clone(), e.event_id.clone());
         remove.connect_clicked(move |_| {
@@ -101,7 +208,49 @@ fn fill(app: &Rc<App>, list: &gtk::Box) {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         row.pack_start(&label, true, true, 0);
         row.pack_end(&remove, false, false, 0);
+        if personal {
+            let edit = gtk::Button::with_label("Edit…");
+            let (a, l, cur) = (app.clone(), list.clone(), e.clone());
+            edit.connect_clicked(move |_| add_or_edit(&a, &l, Some(cur.clone())));
+            row.pack_end(&edit, false, false, 0);
+        }
         list.pack_start(&row, false, false, 0);
     }
     list.show_all();
+}
+
+/// Create a personal entry, or change one the user made earlier.
+fn add_or_edit(app: &Rc<App>, list: &gtk::Box, existing: Option<CalendarEntry>) {
+    let Some(parent) = list
+        .toplevel()
+        .and_then(|w| w.downcast::<gtk::Window>().ok())
+    else {
+        return;
+    };
+    let cur = existing.as_ref().map(|e| Invite {
+        title: e.title.clone(),
+        start_ms: e.start_ms,
+        description: e.description.clone(),
+    });
+    let (heading, ok) = if existing.is_some() {
+        ("Edit event", "Save")
+    } else {
+        ("New event", "Add")
+    };
+    let Some(inv) = event_form(&parent, heading, ok, cur.as_ref()) else {
+        return;
+    };
+    let entry = CalendarEntry {
+        event_id: existing.map(|e| e.event_id).unwrap_or_else(new_personal_id),
+        room_id: String::new(),
+        sender: app.own_id().unwrap_or_default(),
+        title: inv.title,
+        start_ms: inv.start_ms,
+        description: inv.description,
+        response: Response::Accepted,
+    };
+    if let Err(e) = app.db.save_personal_entry(&entry) {
+        error_dialog(app, &format!("Could not save the event: {e}"));
+    }
+    fill(app, list);
 }

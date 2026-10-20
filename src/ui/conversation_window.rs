@@ -1134,81 +1134,16 @@ impl ConversationWindow {
 
     /// New invitation, or (with `existing`) change one of ours that is already sent.
     fn calendar_invite_dialog(self: &Rc<Self>, existing: Option<(String, msm::calendar::Invite)>) {
-        let d = gtk::Dialog::with_buttons(
-            Some(if existing.is_some() {
+        let invite = crate::ui::calendar_window::event_form(
+            self.window.upcast_ref(),
+            if existing.is_some() {
                 "Edit invitation"
             } else {
                 "Calendar invitation"
-            }),
-            Some(&self.window),
-            gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
-            &[
-                ("Cancel", gtk::ResponseType::Cancel),
-                ("Send", gtk::ResponseType::Accept),
-            ],
+            },
+            "Send",
+            existing.as_ref().map(|(_, inv)| inv),
         );
-        d.set_default_response(gtk::ResponseType::Accept);
-        let area = d.content_area();
-        area.set_spacing(6);
-        area.set_margin(12);
-        let title = gtk::Entry::new();
-        title.set_placeholder_text(Some("Title"));
-        title.set_activates_default(true);
-        let today = glib::DateTime::now_local()
-            .ok()
-            .and_then(|t| t.format("%Y-%m-%d").ok())
-            .map(|s| s.to_string())
-            .unwrap_or_default();
-        let date = gtk::Entry::new();
-        date.set_text(&today);
-        date.set_tooltip_text(Some("Date, YYYY-MM-DD (your local time)"));
-        let time = gtk::Entry::new();
-        time.set_text("12:00");
-        time.set_tooltip_text(Some("Time, HH:MM (24-hour, your local time)"));
-        let when = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        when.pack_start(&date, true, true, 0);
-        when.pack_start(&time, true, true, 0);
-        let desc = gtk::Entry::new();
-        desc.set_placeholder_text(Some("Details (optional)"));
-        if let Some((_, inv)) = &existing {
-            title.set_text(&inv.title);
-            desc.set_text(&inv.description);
-            if let Some((d, t)) = msm::calendar::split_local(inv.start_ms) {
-                date.set_text(&d);
-                time.set_text(&t);
-            }
-        }
-        let error = gtk::Label::new(None);
-        error.set_xalign(0.0);
-        for w in [
-            title.upcast_ref::<gtk::Widget>(),
-            when.upcast_ref(),
-            desc.upcast_ref(),
-            error.upcast_ref(),
-        ] {
-            area.pack_start(w, false, false, 0);
-        }
-        d.show_all();
-        let invite = loop {
-            if d.run() != gtk::ResponseType::Accept {
-                break None;
-            }
-            let t = title.text().trim().to_owned();
-            if t.is_empty() {
-                error.set_text("Enter a title.");
-                continue;
-            }
-            let Some(start_ms) = msm::calendar::parse_local(&date.text(), &time.text()) else {
-                error.set_text("Use the date as YYYY-MM-DD and the time as HH:MM.");
-                continue;
-            };
-            break Some(msm::calendar::Invite {
-                title: t,
-                start_ms,
-                description: desc.text().trim().to_owned(),
-            });
-        };
-        d.close();
         let Some(invite) = invite else { return };
         if let Some((event_id, _)) = existing {
             let entry = msm::calendar::Entry::Update {

@@ -310,3 +310,8 @@ Everything feasible without a real desktop panel, a camera, or a Windows machine
 - Applied live in `App::on_live_event` (conversation closed or not) and on every redraw of a conversation (history). Invite card shows the latest title/time, "Cancelled by the organiser" (struck through, no answer buttons) and, for the organiser, Edit… (prefilled dialog) and Cancel event (confirmation).
 - Verified: unit tests (round trips, forged change ignored, rescheduled/cancelled entries on the calendar) and the encrypted-room integration test (update, forged cancel by Bob, real cancel). Full suite: 71 unit + 4 bin + 26 integration pass, clippy clean. Also verified in a single-instance GUI run (alice → bob room): invite card with Edit…/Cancel event, prefilled edit dialog, "rescheduled" card, cancel confirmation (defaults to Keep it), struck-through cancelled card, and the personal calendar emptied. Bob-side display in the GUI was not looked at.
 - Not done: recurrence, reminders, answers to a rescheduled event are not reset, sync of the calendar across installations.
+
+## Session 18 addendum: personal calendar entries
+- Calendar window: "Add event…" creates an entry for the user alone (title, local date/time, details); personal entries (`local:<hex>` IDs, `PERSONAL_PREFIX`) also get "Edit…"; Remove works for all entries. Stored in `calendar_entries` via `Database::save_personal_entry`; they are never sent to Matrix and are not synced across installations.
+- The new/edit form is now one shared function, `calendar_window::event_form`, also used by the conversation's invitation dialog.
+- Verified: unit test (create, change, remove) and a GUI run (add, edit; the Remove button predates this). Full suite: 72 unit + 4 bin + 26 integration pass, clippy clean.

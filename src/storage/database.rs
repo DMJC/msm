@@ -49,6 +49,9 @@ pub struct CalendarEntry {
     pub response: Response,
 }
 
+/// Event IDs of entries the user made themselves start with this; Matrix event IDs start with `$`.
+pub const PERSONAL_PREFIX: &str = "local:";
+
 /// An organiser's change to an invitation, as recorded from their messages.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CalendarChange {
@@ -174,6 +177,28 @@ impl Database {
             "INSERT INTO calendar_entries (event_id, room_id, sender, title, start_ms, description, response)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(event_id) DO UPDATE SET response = excluded.response",
+            params![
+                e.event_id,
+                e.room_id,
+                e.sender,
+                e.title,
+                e.start_ms as i64,
+                e.description,
+                e.response.key()
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Create or change an entry the user made for themselves (not an invitation, so
+    /// every field may change).
+    pub fn save_personal_entry(&self, e: &CalendarEntry) -> Result<(), DbError> {
+        self.conn.lock().expect("db lock").execute(
+            "INSERT INTO calendar_entries (event_id, room_id, sender, title, start_ms, description, response)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(event_id) DO UPDATE SET
+                title = excluded.title, start_ms = excluded.start_ms,
+                description = excluded.description",
             params![
                 e.event_id,
                 e.room_id,
@@ -375,6 +400,32 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY); INSERT INTO schema_migrations VALUES (99);").unwrap();
         assert!(matches!(Database::init(conn), Err(DbError::TooNew { .. })));
+    }
+
+    #[test]
+    fn personal_entries_can_be_created_changed_and_removed() {
+        let db = Database::open_in_memory().unwrap();
+        let mut e = CalendarEntry {
+            event_id: format!("{PERSONAL_PREFIX}abc"),
+            room_id: String::new(),
+            sender: "@me:x".into(),
+            title: "Dentist".into(),
+            start_ms: 2000,
+            description: "".into(),
+            response: Response::Accepted,
+        };
+        db.save_personal_entry(&e).unwrap();
+        e.title = "Dentist (moved)".into();
+        e.start_ms = 1000;
+        db.save_personal_entry(&e).unwrap();
+        let got = db.calendar_entries().unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(
+            (got[0].title.as_str(), got[0].start_ms),
+            ("Dentist (moved)", 1000)
+        );
+        db.remove_calendar_entry(&e.event_id).unwrap();
+        assert!(db.calendar_entries().unwrap().is_empty());
     }
 
     #[test]
