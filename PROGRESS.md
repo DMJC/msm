@@ -221,3 +221,6 @@ UI is still a placeholder window.
 ## Session 17 addendum: ✔ path review
 - The contact-list/conversation ✔ comes from `App::verified_users` (app.rs ~610), filled with `get_user_identity(..).is_verified()` — the same predicate `emoji_verification_between_two_users` asserts true after SAS (and false before/after a mismatch). Verified by code path + that test; not by a live GTK screenshot with two real accounts.
 - Next task: optional three-account GUI run; Element presence/avatar inside msm.
+
+## Session 17 addendum: licensing
+- GPLv3-or-later header (Copyright 2026 James Carthew, no tool attribution) added to all 36 .rs files; `COPYING` holds the GPL-3 text; Cargo.toml `license = "GPL-3.0-or-later"`. Clippy clean, tests pass (integration tests skip without MSM_TEST_HOMESERVER).
