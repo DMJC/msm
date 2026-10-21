@@ -188,7 +188,12 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     search.connect_search_changed(move |_| a.refresh());
     let a = app.clone();
     add.connect_clicked(move |_| {
-        if let Some(id) = prompt(&a, "Add contact", "Matrix ID (@user:server) — they will be asked to accept", "") {
+        if let Some(id) = prompt(
+            &a,
+            "Add contact",
+            "Matrix ID (@user:server) — they will be asked to accept",
+            "",
+        ) {
             // Asks them to be friends; they get a prompt as soon as they are online.
             if let Err(e) = a.try_send_friend_request(&id) {
                 error_dialog(&a, &e.to_string());

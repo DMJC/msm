@@ -14,6 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 pub mod calendar;
+pub mod calls;
 pub mod camera;
 pub mod contacts;
 pub mod icon;
