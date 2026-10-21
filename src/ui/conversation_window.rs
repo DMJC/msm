@@ -195,6 +195,11 @@ impl ConversationWindow {
         let calendar_btn = gtk::Button::with_label("📅");
         calendar_btn.set_tooltip_text(Some("Send a calendar invitation"));
         side.pack_start(&calendar_btn, false, false, 0);
+        let call_btn = gtk::Button::with_label("📞");
+        call_btn.set_tooltip_text(Some("Start a voice call"));
+        if peer.is_some() {
+            side.pack_start(&call_btn, false, false, 0);
+        }
         side.pack_start(&send, false, false, 0);
         row.pack_start(&side, false, false, 0);
         root.pack_start(&row, false, false, 0);
@@ -324,6 +329,12 @@ impl ConversationWindow {
         cw.cancel_upload.connect_clicked(move |_| {
             if let Some(tx) = c.upload_cancel.borrow().as_ref() {
                 let _ = tx.try_send(());
+            }
+        });
+        let c = cw.clone();
+        call_btn.connect_clicked(move |_| {
+            if let Some(peer) = c.peer.as_deref() {
+                c.app.place_call(c.room.clone(), peer);
             }
         });
         let c = cw.clone();

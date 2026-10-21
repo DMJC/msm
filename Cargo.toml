@@ -47,7 +47,7 @@ extended-description = "An MSN-Messenger-style desktop client for Matrix (GTK3, 
 section = "net"
 priority = "optional"
 depends = "$auto"
-recommends = "gnome-keyring | kwalletd5 | kwalletd6, ffmpeg"
+recommends = "gnome-keyring | kwalletd5 | kwalletd6, ffmpeg, pulseaudio-utils"
 assets = [
     ["target/release/msm", "usr/bin/", "755"],
     ["data/com.matrixmessenger.Msm.desktop", "usr/share/applications/", "644"],

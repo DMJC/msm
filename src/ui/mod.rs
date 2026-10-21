@@ -16,6 +16,7 @@
 pub mod avatar;
 pub mod blocked_dialog;
 pub mod calendar_window;
+pub mod call_window;
 pub mod conversation_window;
 pub mod login_window;
 pub mod main_window;

@@ -35,7 +35,8 @@
 - [x] Avatars (own set/remove, contacts, rooms, headers; verified vs Synapse + GUI)
 - [x] In-conversation search (loaded messages), replies (verified vs Synapse + GUI)
 - [x] Integration tests vs local Synapse (17 tests) and an Element Web interop run (text, replies, edits, reactions, redactions, attachments, avatar); [ ] Element checks for verification, presence
-- [ ] Video/Audio calls
+- [x] 1:1 voice calls (Session 18; automated tests + GUI check, Element/NAT/real audio untested)
+- [ ] Video calls; group calls
 - [x] README with install and usage (scripts/install-local.sh); [x] distro packaging (deb, rpm)
 
 ## Platform

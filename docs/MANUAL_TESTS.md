@@ -27,3 +27,12 @@ PROGRESS.md.
    lead time and does not repeat after restarting the app.
 8. **Personal repeating events.** Add a weekly event, check the repeat label and that
    the next occurrence is shown; change "Remind me" in the Calendar window.
+9. **Voice calls (two machines).** Both signed in and already chatting in a direct
+   chat (the other person must have joined it). Press 📞 in the chat window: the other
+   machine shows a notification and a call window; Answer; speak and listen with
+   headsets (there is no echo cancellation, speakers will feed back); try Mute and Hang up
+   from both sides; try Decline; try calling while on a call (the caller gets "busy").
+   Needs `pulseaudio-utils` (`parec`, `pacat`). Report one-way audio or a failed
+   connection; across different networks this needs the homeserver's TURN.
+10. **Voice calls with Element.** Call msm from Element (1:1 voice) and call Element
+    from msm; check both directions connect and audio flows.

@@ -95,6 +95,10 @@ pub struct App {
     /// Minutes of inactivity before automatic Away (0 = off).
     pub away_minutes: Cell<u32>,
     pub presence_msg: RefCell<String>,
+    /// Voice-call signalling for the signed-in account, and its window.
+    pub calls: RefCell<Option<msm::calls::session::Calls>>,
+    call_peer: RefCell<String>,
+    call_window: RefCell<Option<Rc<ui::call_window::CallWindow>>>,
     /// Wire presence for the sync loop (see `matrix::synchronization::run`).
     pub presence_tx: tokio::sync::watch::Sender<presence::Desired>,
     pub tray: RefCell<Option<ksni::Handle<MsmTray>>>,
@@ -155,6 +159,9 @@ impl App {
             idle: RefCell::new(None),
             away_minutes: Cell::new(away_minutes),
             presence_msg: RefCell::new(presence_msg),
+            calls: RefCell::new(None),
+            call_peer: RefCell::new(String::new()),
+            call_window: RefCell::new(None),
             presence_tx,
             tray: RefCell::new(None),
             invites: RefCell::new(Vec::new()),
@@ -227,6 +234,21 @@ impl App {
         });
 
         crate::reminders::start(self);
+
+        // Voice calls: registered before most events arrive; UI updates come back here.
+        let (ctx, crx) = async_channel::unbounded();
+        let calls = msm::calls::session::Calls::start(
+            &client,
+            ctx,
+            Arc::new(msm::calls::audio::system_audio),
+        );
+        *self.calls.borrow_mut() = Some(calls);
+        let app = self.clone();
+        glib::MainContext::default().spawn_local(async move {
+            while let Ok(ev) = crx.recv().await {
+                app.on_call_event(ev);
+            }
+        });
 
         // Incoming verification requests open the verification window.
         let (vtx, vrx) = async_channel::unbounded();
@@ -511,6 +533,9 @@ impl App {
     }
 
     pub fn end_session(&self, server_logout: bool) {
+        if let Some(calls) = self.calls.borrow_mut().take() {
+            spawn_async(async move { calls.hang_up().await }, |_| {});
+        }
         if let Some(t) = self.sync_task.borrow_mut().take() {
             t.abort();
         }
@@ -855,6 +880,43 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Call `peer` in `room` (a direct chat).
+    pub fn place_call(self: &Rc<Self>, room: matrix_sdk::Room, peer: &str) {
+        let Some(calls) = self.calls.borrow().clone() else {
+            return;
+        };
+        *self.call_peer.borrow_mut() = peer.to_owned();
+        let (app, peer) = (self.clone(), peer.to_owned());
+        spawn_async(async move { calls.place(room, &peer).await }, move |res| {
+            if let Err(e) = res {
+                ui::main_window::error_dialog(&app, &e);
+            }
+        });
+    }
+
+    fn on_call_event(self: &Rc<Self>, ev: msm::calls::session::CallEvent) {
+        use msm::calls::session::CallEvent;
+        let who = match &ev {
+            CallEvent::Incoming { caller, .. } => {
+                let name = self.mgr.borrow().resolver().resolve(caller, None);
+                self.notify("call", &name, "is calling you");
+                *self.call_peer.borrow_mut() = caller.clone();
+                Some(name)
+            }
+            CallEvent::Ringing { .. } => {
+                let peer = self.call_peer.borrow().clone();
+                Some(self.mgr.borrow().resolver().resolve(&peer, None))
+            }
+            _ => None,
+        };
+        let win = self
+            .call_window
+            .borrow_mut()
+            .get_or_insert_with(|| ui::call_window::build(self))
+            .clone();
+        win.show(&ev, who.as_deref());
     }
 
     pub fn notify(&self, room_id: &str, sender: &str, body: &str) {
