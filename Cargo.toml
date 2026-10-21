@@ -66,3 +66,8 @@ assets = [
 
 [package.metadata.generate-rpm.requires]
 gtk3 = "*"
+
+[profile.release]
+strip = true
+lto = "fat"
+codegen-units = 1
