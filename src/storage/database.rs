@@ -340,6 +340,21 @@ impl Database {
         Ok(entries)
     }
 
+    /// Record that the reminder `key` was sent; false if it already had been. Records
+    /// older than a day are dropped (an occurrence's window is long over by then).
+    pub fn mark_reminded(&self, key: &str, now_ms: u64) -> Result<bool, DbError> {
+        let conn = self.conn.lock().expect("db lock");
+        conn.execute(
+            "DELETE FROM calendar_reminded WHERE at_ms < ?1",
+            [now_ms.saturating_sub(86_400_000) as i64],
+        )?;
+        let added = conn.execute(
+            "INSERT OR IGNORE INTO calendar_reminded (key, at_ms) VALUES (?1, ?2)",
+            params![key, now_ms as i64],
+        )?;
+        Ok(added == 1)
+    }
+
     pub fn remove_calendar_entry(&self, event_id: &str) -> Result<(), DbError> {
         self.conn.lock().expect("db lock").execute(
             "DELETE FROM calendar_entries WHERE event_id = ?1",
@@ -413,6 +428,16 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY); INSERT INTO schema_migrations VALUES (99);").unwrap();
         assert!(matches!(Database::init(conn), Err(DbError::TooNew { .. })));
+    }
+
+    #[test]
+    fn a_reminder_is_only_recorded_once() {
+        let db = Database::open_in_memory().unwrap();
+        let day = 86_400_000;
+        assert!(db.mark_reminded("a@1", 1000).unwrap());
+        assert!(!db.mark_reminded("a@1", 2000).unwrap());
+        // Old records are pruned, so the same key could remind again much later.
+        assert!(db.mark_reminded("a@1", 1000 + 2 * day).unwrap());
     }
 
     #[test]

@@ -20,7 +20,7 @@ use std::rc::Rc;
 
 use gtk::glib;
 use gtk::prelude::*;
-use msm::calendar::{Repeat, Response, format_start};
+use msm::calendar::{LEAD_CHOICES_MIN, LEAD_SETTING, Repeat, Response, format_start};
 
 use msm::calendar::Invite;
 use msm::storage::database::{CalendarEntry, PERSONAL_PREFIX};
@@ -162,6 +162,25 @@ pub fn open(app: &Rc<App>) {
         add.connect_clicked(move |_| add_or_edit(&app, &list, None));
     }
     d.content_area().pack_start(&add, false, false, 6);
+    let lead = gtk::ComboBoxText::new();
+    for m in LEAD_CHOICES_MIN {
+        let label = if m == 0 {
+            "No reminders".to_owned()
+        } else {
+            format!("Remind me {m} min before")
+        };
+        lead.append(Some(&m.to_string()), &label);
+    }
+    lead.set_active_id(Some(&(crate::reminders::lead_ms(app) / 60_000).to_string()));
+    {
+        let app = app.clone();
+        lead.connect_changed(move |c| {
+            if let Some(id) = c.active_id() {
+                let _ = app.db.set_setting(LEAD_SETTING, &id);
+            }
+        });
+    }
+    d.content_area().pack_start(&lead, false, false, 0);
     let scroll = gtk::ScrolledWindow::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
     scroll.add(&list);
     d.content_area().pack_start(&scroll, true, true, 0);

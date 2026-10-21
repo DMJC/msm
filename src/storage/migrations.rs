@@ -58,4 +58,9 @@ pub const MIGRATIONS: &[&str] = &[
      );",
     // 5: personal entries can repeat (never/daily/weekly/monthly)
     "ALTER TABLE calendar_entries ADD COLUMN repeat TEXT NOT NULL DEFAULT 'never';",
+    // 6: reminders already sent, so a restart does not repeat them
+    "CREATE TABLE calendar_reminded (
+        key TEXT PRIMARY KEY,
+        at_ms INTEGER NOT NULL
+     );",
 ];

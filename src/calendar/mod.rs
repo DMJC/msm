@@ -232,7 +232,12 @@ pub enum Repeat {
 }
 
 impl Repeat {
-    pub const ALL: [Repeat; 4] = [Repeat::Never, Repeat::Daily, Repeat::Weekly, Repeat::Monthly];
+    pub const ALL: [Repeat; 4] = [
+        Repeat::Never,
+        Repeat::Daily,
+        Repeat::Weekly,
+        Repeat::Monthly,
+    ];
 
     pub fn key(self) -> &'static str {
         match self {
@@ -302,12 +307,17 @@ pub fn next_occurrence(start_ms: u64, repeat: Repeat, now_ms: u64) -> u64 {
 
 /// How long before an event its reminder fires.
 pub const REMINDER_LEAD_MS: u64 = 10 * 60 * 1000;
+/// Lead times offered in the Calendar window, in minutes (0 turns reminders off).
+pub const LEAD_CHOICES_MIN: [u32; 6] = [0, 5, 10, 15, 30, 60];
+/// Setting key holding the chosen lead time in minutes.
+pub const LEAD_SETTING: &str = "reminder_lead_min";
 /// An event that began this recently still gets a reminder (the app was closed or asleep).
 pub const REMINDER_GRACE_MS: u64 = 5 * 60 * 1000;
 
 /// Whether an event starting at `start_ms` is due a reminder at `now_ms`.
-pub fn reminder_due(start_ms: u64, now_ms: u64) -> bool {
-    start_ms <= now_ms.saturating_add(REMINDER_LEAD_MS)
+pub fn reminder_due(start_ms: u64, now_ms: u64, lead_ms: u64) -> bool {
+    lead_ms > 0
+        && start_ms <= now_ms.saturating_add(lead_ms)
         && start_ms.saturating_add(REMINDER_GRACE_MS) > now_ms
 }
 
@@ -421,11 +431,22 @@ mod tests {
     fn reminders_fire_in_the_lead_window_and_shortly_after_the_start() {
         let now = 1_000_000_000u64;
         let min = 60_000;
-        assert!(!reminder_due(now + 11 * min, now), "too early");
-        assert!(reminder_due(now + 10 * min, now));
-        assert!(reminder_due(now, now));
-        assert!(reminder_due(now - 4 * min, now), "just started");
-        assert!(!reminder_due(now - 6 * min, now), "long past");
+        assert!(
+            !reminder_due(now + 11 * min, now, REMINDER_LEAD_MS),
+            "too early"
+        );
+        assert!(reminder_due(now + 10 * min, now, REMINDER_LEAD_MS));
+        assert!(reminder_due(now, now, REMINDER_LEAD_MS));
+        assert!(
+            reminder_due(now - 4 * min, now, REMINDER_LEAD_MS),
+            "just started"
+        );
+        assert!(
+            !reminder_due(now - 6 * min, now, REMINDER_LEAD_MS),
+            "long past"
+        );
+        assert!(reminder_due(now + 30 * min, now, 30 * min), "longer lead");
+        assert!(!reminder_due(now, now, 0), "reminders off");
         assert_eq!(starts_in(now + 7 * min - 1, now), "in 7 min");
         assert_eq!(starts_in(now, now), "starting now");
         assert_eq!(starts_in(now - 3 * min, now), "started 3 min ago");
@@ -444,11 +465,20 @@ mod tests {
         let now = parse_local("2026-03-01", "08:00").unwrap();
         assert_eq!(next_occurrence(start, Repeat::Never, now), start);
         let monthly = next_occurrence(start, Repeat::Monthly, now);
-        assert_eq!(split_local(monthly), Some(("2026-03-31".into(), "09:00".into())));
+        assert_eq!(
+            split_local(monthly),
+            Some(("2026-03-31".into(), "09:00".into()))
+        );
         let weekly = next_occurrence(start, Repeat::Weekly, now);
-        assert_eq!(split_local(weekly), Some(("2026-03-07".into(), "09:00".into())));
+        assert_eq!(
+            split_local(weekly),
+            Some(("2026-03-07".into(), "09:00".into()))
+        );
         let daily = next_occurrence(start, Repeat::Daily, now);
-        assert_eq!(split_local(daily), Some(("2026-03-01".into(), "09:00".into())));
+        assert_eq!(
+            split_local(daily),
+            Some(("2026-03-01".into(), "09:00".into()))
+        );
         // Still shown during the grace period after it begins, then moves on.
         let just_after = parse_local("2026-03-01", "09:02").unwrap();
         assert_eq!(next_occurrence(start, Repeat::Daily, just_after), daily);

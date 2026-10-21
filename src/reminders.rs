@@ -16,20 +16,18 @@
 //! Desktop reminders for calendar events: one notification shortly before an event
 //! starts (or just after, if the app was not running), once per event.
 
-use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::cell::Cell;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gtk::glib;
 use gtk::prelude::*;
-use msm::calendar::{format_start, reminder_due, starts_in};
+use msm::calendar::{LEAD_SETTING, REMINDER_LEAD_MS, format_start, reminder_due, starts_in};
 
 use crate::app::App;
 
 thread_local! {
     static STARTED: Cell<bool> = const { Cell::new(false) };
-    static REMINDED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
 /// Check the calendar every 30 seconds. Safe to call again after signing back in.
@@ -52,13 +50,16 @@ fn check(app: &Rc<App>) {
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
         .as_millis() as u64;
+    let lead_ms = lead_ms(app);
     let Ok(entries) = app.db.calendar_entries() else {
         return;
     };
     for e in entries {
         // Key on the start time too, so a rescheduled event reminds again.
         let key = format!("{}@{}", e.event_id, e.start_ms);
-        if !reminder_due(e.start_ms, now) || !REMINDED.with(|r| r.borrow_mut().insert(key)) {
+        if !reminder_due(e.start_ms, now, lead_ms)
+            || !app.db.mark_reminded(&key, now).unwrap_or(false)
+        {
             continue;
         }
         let n = gtk::gio::Notification::new(&format!("📅 {}", e.title));
@@ -69,4 +70,15 @@ fn check(app: &Rc<App>) {
         )));
         gapp.send_notification(Some(&format!("cal-{}", e.event_id)), &n);
     }
+}
+
+/// The chosen reminder lead time in ms (0 = reminders off); 10 minutes by default.
+pub fn lead_ms(app: &App) -> u64 {
+    app.db
+        .get_setting(LEAD_SETTING)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|m| m * 60_000)
+        .unwrap_or(REMINDER_LEAD_MS)
 }
