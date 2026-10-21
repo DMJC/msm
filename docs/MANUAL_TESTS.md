@@ -1,7 +1,10 @@
 # Manual tests for a second machine
 
 These are the checks automated testing could not do. Install msm on the second PC
-(`cargo build --release`, or the .deb/.rpm from the GitHub release) and sign in as a
+(copy over a stripped release binary built on the main machine with
+`cargo build --release` — about 55 MB, no Rust toolchain or `target/` directory needed on a
+small laptop; it needs the GTK3 runtime libraries, `pulseaudio-utils` for calls and a Secret
+Service keyring — or install the .deb/.rpm from the GitHub release) and sign in as a
 second account (or the same one) on the same homeserver. Note the result of each in
 PROGRESS.md.
 
