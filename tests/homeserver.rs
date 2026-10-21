@@ -1926,6 +1926,7 @@ async fn calendar_invitation_and_rsvp_cross_an_encrypted_room() {
             start_ms: invite.start_ms,
             description: invite.description.clone(),
             response: Response::Accepted,
+            repeat: msm::calendar::Repeat::Never,
         })
         .unwrap();
     };

@@ -22,7 +22,7 @@ use std::sync::Mutex;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::calendar::Response;
+use crate::calendar::{Repeat, Response, next_occurrence};
 use thiserror::Error;
 
 use super::migrations::MIGRATIONS;
@@ -47,6 +47,9 @@ pub struct CalendarEntry {
     pub start_ms: u64,
     pub description: String,
     pub response: Response,
+    /// Only personal entries repeat; for those `start_ms` is the first occurrence on write
+    /// and the next one on read.
+    pub repeat: Repeat,
 }
 
 /// Event IDs of entries the user made themselves start with this; Matrix event IDs start with `$`.
@@ -194,11 +197,11 @@ impl Database {
     /// every field may change).
     pub fn save_personal_entry(&self, e: &CalendarEntry) -> Result<(), DbError> {
         self.conn.lock().expect("db lock").execute(
-            "INSERT INTO calendar_entries (event_id, room_id, sender, title, start_ms, description, response)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO calendar_entries (event_id, room_id, sender, title, start_ms, description, response, repeat)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(event_id) DO UPDATE SET
                 title = excluded.title, start_ms = excluded.start_ms,
-                description = excluded.description",
+                description = excluded.description, repeat = excluded.repeat",
             params![
                 e.event_id,
                 e.room_id,
@@ -206,7 +209,8 @@ impl Database {
                 e.title,
                 e.start_ms as i64,
                 e.description,
-                e.response.key()
+                e.response.key(),
+                e.repeat.key()
             ],
         )?;
         Ok(())
@@ -306,25 +310,34 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT e.event_id, e.room_id, e.sender,
                     COALESCE(c.title, e.title), COALESCE(c.start_ms, e.start_ms),
-                    COALESCE(c.description, e.description), e.response
+                    COALESCE(c.description, e.description), e.response, e.repeat
              FROM calendar_entries e
              LEFT JOIN calendar_changes c ON c.event_id = e.event_id AND c.sender = e.sender
              WHERE e.response != 'declined' AND COALESCE(c.cancelled, 0) = 0
              ORDER BY COALESCE(c.start_ms, e.start_ms), e.event_id",
         )?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
         let rows = stmt.query_map([], |r| {
+            let repeat = Repeat::from_key(&r.get::<_, String>(7)?).unwrap_or_default();
             Ok(CalendarEntry {
                 event_id: r.get(0)?,
                 room_id: r.get(1)?,
                 sender: r.get(2)?,
                 title: r.get(3)?,
-                start_ms: r.get::<_, i64>(4)? as u64,
+                start_ms: next_occurrence(r.get::<_, i64>(4)? as u64, repeat, now),
                 description: r.get(5)?,
                 response: Response::from_key(&r.get::<_, String>(6)?)
                     .unwrap_or(Response::Tentative),
+                repeat,
             })
         })?;
-        Ok(rows.collect::<Result<_, _>>()?)
+        let mut entries: Vec<CalendarEntry> = rows.collect::<Result<_, _>>()?;
+        // Repeating entries moved forward, so the SQL order may be stale.
+        entries.sort_by(|a, b| (a.start_ms, &a.event_id).cmp(&(b.start_ms, &b.event_id)));
+        Ok(entries)
     }
 
     pub fn remove_calendar_entry(&self, event_id: &str) -> Result<(), DbError> {
@@ -403,6 +416,29 @@ mod tests {
     }
 
     #[test]
+    fn repeating_personal_entries_show_their_next_occurrence() {
+        let db = Database::open_in_memory().unwrap();
+        let e = CalendarEntry {
+            event_id: format!("{PERSONAL_PREFIX}rep"),
+            room_id: String::new(),
+            sender: "@me:x".into(),
+            title: "Stand-up".into(),
+            start_ms: crate::calendar::parse_local("2020-01-06", "09:30").unwrap(),
+            description: String::new(),
+            response: Response::Accepted,
+            repeat: Repeat::Weekly,
+        };
+        db.save_personal_entry(&e).unwrap();
+        let got = db.calendar_entries().unwrap();
+        assert_eq!(got[0].repeat, Repeat::Weekly);
+        assert!(got[0].start_ms > e.start_ms);
+        let (date, time) = crate::calendar::split_local(got[0].start_ms).unwrap();
+        assert_eq!(time, "09:30");
+        let day = chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d").unwrap();
+        assert_eq!(chrono::Datelike::weekday(&day), chrono::Weekday::Mon);
+    }
+
+    #[test]
     fn personal_entries_can_be_created_changed_and_removed() {
         let db = Database::open_in_memory().unwrap();
         let mut e = CalendarEntry {
@@ -413,6 +449,7 @@ mod tests {
             start_ms: 2000,
             description: "".into(),
             response: Response::Accepted,
+            repeat: Repeat::Never,
         };
         db.save_personal_entry(&e).unwrap();
         e.title = "Dentist (moved)".into();
@@ -440,6 +477,7 @@ mod tests {
             start_ms: 1000,
             description: "".into(),
             response: Response::Accepted,
+            repeat: Repeat::Never,
         })
         .unwrap();
         let moved = Entry::Update {
@@ -494,6 +532,7 @@ mod tests {
             start_ms: start,
             description: String::new(),
             response: r,
+            repeat: Repeat::Never,
         };
         db.save_calendar_entry(&mk("$late", 2000, Response::Accepted))
             .unwrap();

@@ -20,7 +20,7 @@ use std::rc::Rc;
 
 use gtk::glib;
 use gtk::prelude::*;
-use msm::calendar::{Response, format_start};
+use msm::calendar::{Repeat, Response, format_start};
 
 use msm::calendar::Invite;
 use msm::storage::database::{CalendarEntry, PERSONAL_PREFIX};
@@ -36,6 +36,17 @@ pub fn event_form(
     ok_label: &str,
     existing: Option<&Invite>,
 ) -> Option<Invite> {
+    event_form_with(parent, heading, ok_label, existing, None).map(|(inv, _)| inv)
+}
+
+/// [`event_form`] plus a "repeats" choice when `repeat` is given (personal entries only).
+fn event_form_with(
+    parent: &gtk::Window,
+    heading: &str,
+    ok_label: &str,
+    existing: Option<&Invite>,
+    repeat: Option<Repeat>,
+) -> Option<(Invite, Repeat)> {
     let d = gtk::Dialog::with_buttons(
         Some(heading),
         Some(parent),
@@ -76,8 +87,16 @@ pub fn event_form(
             time.set_text(&t);
         }
     }
+    let repeats = gtk::ComboBoxText::new();
+    for r in Repeat::ALL {
+        repeats.append(Some(r.key()), r.label());
+    }
+    repeats.set_active_id(Some(repeat.unwrap_or_default().key()));
     let error = gtk::Label::new(None);
     error.set_xalign(0.0);
+    if repeat.is_some() {
+        area.pack_start(&repeats, false, false, 0);
+    }
     for w in [
         title.upcast_ref::<gtk::Widget>(),
         when.upcast_ref(),
@@ -100,11 +119,18 @@ pub fn event_form(
             error.set_text("Use the date as YYYY-MM-DD and the time as HH:MM.");
             continue;
         };
-        break Some(Invite {
-            title: t,
-            start_ms,
-            description: desc.text().trim().to_owned(),
-        });
+        let chosen = repeats
+            .active_id()
+            .and_then(|k| Repeat::from_key(&k))
+            .unwrap_or_default();
+        break Some((
+            Invite {
+                title: t,
+                start_ms,
+                description: desc.text().trim().to_owned(),
+            },
+            chosen,
+        ));
     };
     d.close();
     invite
@@ -179,6 +205,10 @@ fn fill(app: &Rc<App>, list: &gtk::Box) {
             Response::Tentative => " · <i>tentative</i>",
             _ => "",
         };
+        let again = match e.repeat {
+            Repeat::Never => String::new(),
+            r => format!(" · {}", r.label().to_lowercase()),
+        };
         let label = gtk::Label::new(None);
         label.set_xalign(0.0);
         label.set_line_wrap(true);
@@ -191,7 +221,7 @@ fn fill(app: &Rc<App>, list: &gtk::Box) {
             )
         };
         label.set_markup(&format!(
-            "<b>{}</b>{tag}\n{} · {}{details}",
+            "<b>{}</b>{tag}\n{} · {}{again}{details}",
             glib::markup_escape_text(&e.title),
             glib::markup_escape_text(&format_start(e.start_ms)),
             glib::markup_escape_text(&who)
@@ -237,7 +267,9 @@ fn add_or_edit(app: &Rc<App>, list: &gtk::Box, existing: Option<CalendarEntry>) 
     } else {
         ("New event", "Add")
     };
-    let Some(inv) = event_form(&parent, heading, ok, cur.as_ref()) else {
+    let repeat = existing.as_ref().map(|e| e.repeat).unwrap_or_default();
+    let Some((inv, repeat)) = event_form_with(&parent, heading, ok, cur.as_ref(), Some(repeat))
+    else {
         return;
     };
     let entry = CalendarEntry {
@@ -248,6 +280,7 @@ fn add_or_edit(app: &Rc<App>, list: &gtk::Box, existing: Option<CalendarEntry>) 
         start_ms: inv.start_ms,
         description: inv.description,
         response: Response::Accepted,
+        repeat,
     };
     if let Err(e) = app.db.save_personal_entry(&entry) {
         error_dialog(app, &format!("Could not save the event: {e}"));

@@ -56,4 +56,6 @@ pub const MIGRATIONS: &[&str] = &[
         description TEXT,
         PRIMARY KEY (event_id, sender)
      );",
+    // 5: personal entries can repeat (never/daily/weekly/monthly)
+    "ALTER TABLE calendar_entries ADD COLUMN repeat TEXT NOT NULL DEFAULT 'never';",
 ];

@@ -221,6 +221,85 @@ pub fn parse(content: &Value) -> Option<Entry> {
     }
 }
 
+/// How often a personal entry repeats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Repeat {
+    #[default]
+    Never,
+    Daily,
+    Weekly,
+    Monthly,
+}
+
+impl Repeat {
+    pub const ALL: [Repeat; 4] = [Repeat::Never, Repeat::Daily, Repeat::Weekly, Repeat::Monthly];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Repeat::Never => "never",
+            Repeat::Daily => "daily",
+            Repeat::Weekly => "weekly",
+            Repeat::Monthly => "monthly",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|r| r.key() == k)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Repeat::Never => "Does not repeat",
+            Repeat::Daily => "Every day",
+            Repeat::Weekly => "Every week",
+            Repeat::Monthly => "Every month",
+        }
+    }
+}
+
+/// The `n`th occurrence (0 is the first) at the same local wall-clock time. Monthly
+/// repeats clamp to the month's last day (31 Jan → 28 Feb) without drifting afterwards.
+fn occurrence(start_ms: u64, repeat: Repeat, n: u32) -> Option<u64> {
+    let first = match Local.timestamp_millis_opt(start_ms as i64) {
+        LocalResult::Single(dt) | LocalResult::Ambiguous(dt, _) => dt.naive_local(),
+        LocalResult::None => return None,
+    };
+    let at = match repeat {
+        Repeat::Never => first,
+        Repeat::Daily => first.checked_add_days(chrono::Days::new(u64::from(n)))?,
+        Repeat::Weekly => first.checked_add_days(chrono::Days::new(7 * u64::from(n)))?,
+        Repeat::Monthly => first.checked_add_months(chrono::Months::new(n))?,
+    };
+    match Local.from_local_datetime(&at) {
+        LocalResult::Single(dt) | LocalResult::Ambiguous(dt, _) => {
+            u64::try_from(dt.timestamp_millis()).ok()
+        }
+        // Skipped by a clock change: fall back to a fixed offset.
+        LocalResult::None => None,
+    }
+}
+
+/// The occurrence of a repeating entry to show at `now_ms`: the first one that has not
+/// yet passed its reminder grace period. Non-repeating entries keep their own time.
+pub fn next_occurrence(start_ms: u64, repeat: Repeat, now_ms: u64) -> u64 {
+    if repeat == Repeat::Never {
+        return start_ms;
+    }
+    let mut n = match repeat {
+        Repeat::Daily => (now_ms.saturating_sub(start_ms) / 86_400_000).saturating_sub(1),
+        Repeat::Weekly => (now_ms.saturating_sub(start_ms) / (7 * 86_400_000)).saturating_sub(1),
+        _ => 0,
+    } as u32;
+    // Bounded: a century of daily repeats is under 40 000 steps.
+    for _ in 0..50_000 {
+        match occurrence(start_ms, repeat, n) {
+            Some(t) if t.saturating_add(REMINDER_GRACE_MS) > now_ms => return t,
+            Some(_) | None => n += 1,
+        }
+    }
+    start_ms
+}
+
 /// How long before an event its reminder fires.
 pub const REMINDER_LEAD_MS: u64 = 10 * 60 * 1000;
 /// An event that began this recently still gets a reminder (the app was closed or asleep).
@@ -357,5 +436,36 @@ mod tests {
         assert!(Response::Tentative.on_calendar());
         assert!(Response::Accepted.on_calendar());
         assert!(!Response::Declined.on_calendar());
+    }
+
+    #[test]
+    fn repeats_roll_forward_to_the_next_occurrence() {
+        let start = parse_local("2026-01-31", "09:00").unwrap();
+        let now = parse_local("2026-03-01", "08:00").unwrap();
+        assert_eq!(next_occurrence(start, Repeat::Never, now), start);
+        let monthly = next_occurrence(start, Repeat::Monthly, now);
+        assert_eq!(split_local(monthly), Some(("2026-03-31".into(), "09:00".into())));
+        let weekly = next_occurrence(start, Repeat::Weekly, now);
+        assert_eq!(split_local(weekly), Some(("2026-03-07".into(), "09:00".into())));
+        let daily = next_occurrence(start, Repeat::Daily, now);
+        assert_eq!(split_local(daily), Some(("2026-03-01".into(), "09:00".into())));
+        // Still shown during the grace period after it begins, then moves on.
+        let just_after = parse_local("2026-03-01", "09:02").unwrap();
+        assert_eq!(next_occurrence(start, Repeat::Daily, just_after), daily);
+        let later = parse_local("2026-03-01", "09:10").unwrap();
+        assert_eq!(
+            split_local(next_occurrence(start, Repeat::Daily, later)),
+            Some(("2026-03-02".into(), "09:00".into()))
+        );
+        // An entry in the future is left alone.
+        assert_eq!(next_occurrence(now, Repeat::Daily, start), now);
+    }
+
+    #[test]
+    fn repeat_keys_round_trip() {
+        for r in Repeat::ALL {
+            assert_eq!(Repeat::from_key(r.key()), Some(r));
+        }
+        assert_eq!(Repeat::from_key("hourly"), None);
     }
 }

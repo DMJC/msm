@@ -1108,6 +1108,7 @@ impl ConversationWindow {
             start_ms: inv.start_ms,
             description: inv.description.clone(),
             response,
+            repeat: msm::calendar::Repeat::Never,
         };
         if let Err(e) = self.app.db.save_calendar_entry(&entry) {
             self.typing
@@ -1193,6 +1194,7 @@ impl ConversationWindow {
                                 start_ms: invite.start_ms,
                                 description: invite.description,
                                 response: msm::calendar::Response::Accepted,
+                                repeat: msm::calendar::Repeat::Never,
                             });
                 }
                 Err(e) => this
