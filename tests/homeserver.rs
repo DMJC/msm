@@ -1954,3 +1954,177 @@ async fn calendar_invitation_and_rsvp_cross_an_encrypted_room() {
         "the organiser's cancel applies"
     );
 }
+
+type Heard = std::sync::Arc<std::sync::Mutex<Option<tokio::sync::mpsc::Receiver<Vec<i16>>>>>;
+
+/// A fake sound card: sends a 440 Hz tone and hands the test what the call played.
+fn tone_audio() -> (msm::calls::session::AudioFactory, Heard) {
+    use msm::calls::engine::{AudioIo, FRAME_SAMPLES};
+    let heard = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let h = heard.clone();
+    let factory: msm::calls::session::AudioFactory = std::sync::Arc::new(move || {
+        let (mic_tx, mic) = tokio::sync::mpsc::channel(8);
+        let (speaker, spk_rx) = tokio::sync::mpsc::channel(64);
+        *h.lock().unwrap() = Some(spk_rx);
+        tokio::spawn(async move {
+            let mut phase = 0f32;
+            let mut tick = tokio::time::interval(Duration::from_millis(20));
+            loop {
+                tick.tick().await;
+                let frame: Vec<i16> = (0..FRAME_SAMPLES)
+                    .map(|_| {
+                        phase += 2.0 * std::f32::consts::PI * 440.0 / 48_000.0;
+                        (phase.sin() * 8000.0) as i16
+                    })
+                    .collect();
+                if mic_tx.send(frame).await.is_err() {
+                    return;
+                }
+            }
+        });
+        Ok(AudioIo { mic, speaker })
+    });
+    (factory, heard)
+}
+
+async fn next_call_event(
+    rx: &async_channel::Receiver<msm::calls::session::CallEvent>,
+    want: impl Fn(&msm::calls::session::CallEvent) -> bool,
+) -> msm::calls::session::CallEvent {
+    tokio::time::timeout(Duration::from_secs(40), async {
+        loop {
+            let e = rx.recv().await.expect("call events closed");
+            if want(&e) {
+                return e;
+            }
+        }
+    })
+    .await
+    .expect("expected call event never arrived")
+}
+
+async fn assert_hears_tone(heard: &Heard) {
+    let mut rx = heard.lock().unwrap().take().expect("audio was opened");
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let f = rx.recv().await.expect("speaker closed");
+            if f.iter().map(|s| s.abs()).max().unwrap_or(0) > 2000 {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("no tone was heard");
+}
+
+#[tokio::test]
+async fn voice_call_between_two_users() {
+    use msm::calls::session::{CallEvent, Calls};
+    let Some(hs) = homeserver() else { return };
+    let (alice, _, _) = register_fresh(&hs).await;
+    let (bob, _, _) = register_fresh(&hs).await;
+    let bob_id = bob.user_id().unwrap().to_string();
+    let (atx, arx) = async_channel::unbounded();
+    let (btx, brx) = async_channel::unbounded();
+    let (a_audio, a_heard) = tone_audio();
+    let (b_audio, b_heard) = tone_audio();
+    let a_calls = Calls::start(&alice, atx, a_audio);
+    let b_calls = Calls::start(&bob, btx, b_audio);
+    for c in [&alice, &bob] {
+        let c = c.clone();
+        tokio::spawn(async move {
+            let _ = c.sync(SyncSettings::default()).await;
+        });
+    }
+    let b2 = bob.clone();
+    tokio::spawn(async move {
+        loop {
+            for r in b2.invited_rooms() {
+                let _ = r.join().await;
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+    });
+    let room = rooms::open_or_create_dm(&alice, &bob_id).await.unwrap();
+    // Wait until bob is in the room before ringing.
+    let rid = room.room_id().to_owned();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while bob
+            .get_room(&rid)
+            .is_none_or(|r| r.state() != matrix_sdk::RoomState::Joined)
+        {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .expect("bob joined");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    a_calls.place(room, &bob_id).await.expect("place call");
+    next_call_event(&arx, |e| matches!(e, CallEvent::Ringing { .. })).await;
+    let incoming = next_call_event(&brx, |e| matches!(e, CallEvent::Incoming { .. })).await;
+    let CallEvent::Incoming { caller, .. } = incoming else {
+        unreachable!()
+    };
+    assert_eq!(caller, alice.user_id().unwrap().to_string());
+    b_calls.answer().await.expect("answer");
+    next_call_event(&arx, |e| *e == CallEvent::Active).await;
+    next_call_event(&brx, |e| *e == CallEvent::Active).await;
+    assert_hears_tone(&a_heard).await;
+    assert_hears_tone(&b_heard).await;
+
+    // Hanging up on one side ends it on the other.
+    b_calls.hang_up().await;
+    next_call_event(&brx, |e| matches!(e, CallEvent::Ended { .. })).await;
+    next_call_event(&arx, |e| matches!(e, CallEvent::Ended { .. })).await;
+    assert!(!a_calls.busy().await && !b_calls.busy().await);
+}
+
+#[tokio::test]
+async fn declining_a_call_ends_it_for_the_caller() {
+    use msm::calls::session::{CallEvent, Calls};
+    let Some(hs) = homeserver() else { return };
+    let (alice, _, _) = register_fresh(&hs).await;
+    let (bob, _, _) = register_fresh(&hs).await;
+    let bob_id = bob.user_id().unwrap().to_string();
+    let (atx, arx) = async_channel::unbounded();
+    let (btx, brx) = async_channel::unbounded();
+    let (a_audio, _) = tone_audio();
+    let (b_audio, _) = tone_audio();
+    let a_calls = Calls::start(&alice, atx, a_audio);
+    let b_calls = Calls::start(&bob, btx, b_audio);
+    for c in [&alice, &bob] {
+        let c = c.clone();
+        tokio::spawn(async move {
+            let _ = c.sync(SyncSettings::default()).await;
+        });
+    }
+    let b2 = bob.clone();
+    tokio::spawn(async move {
+        loop {
+            for r in b2.invited_rooms() {
+                let _ = r.join().await;
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+    });
+    let room = rooms::open_or_create_dm(&alice, &bob_id).await.unwrap();
+    let rid = room.room_id().to_owned();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while bob
+            .get_room(&rid)
+            .is_none_or(|r| r.state() != matrix_sdk::RoomState::Joined)
+        {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .expect("bob joined");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    a_calls.place(room, &bob_id).await.unwrap();
+    next_call_event(&brx, |e| matches!(e, CallEvent::Incoming { .. })).await;
+    b_calls.hang_up().await; // declines: not answered yet
+    next_call_event(&arx, |e| matches!(e, CallEvent::Ended { .. })).await;
+    assert!(!a_calls.busy().await);
+}

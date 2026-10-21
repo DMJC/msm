@@ -174,7 +174,6 @@ impl Engine {
                 RTCRtpCodecParameters {
                     rtp_codec: opus_codec(),
                     payload_type: OPUS_PAYLOAD_TYPE,
-                    ..Default::default()
                 },
                 RtpCodecKind::Audio,
             )
