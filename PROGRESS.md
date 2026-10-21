@@ -328,3 +328,8 @@ Everything feasible without a real desktop panel, a camera, or a Windows machine
 
 ## Session 18 addendum: reminder settings
 - The Calendar window has a "Remind me N min before" choice (off, 5, 10, 15, 30, 60; default 10), stored in the `reminder_lead_min` setting. Sent reminders are now recorded in `calendar_reminded` (migration 6, pruned after a day), so restarting the app no longer repeats them. Tests: 77 unit (+1 ignored), 4 bin, 26 integration (no-ops, no Synapse); clippy clean. The combo box was not exercised in the GUI.
+
+## Session 18 addendum: single sign-on login
+- The login window has "Sign in with your browser (Google, GitHub, SSO…)". `authentication::login_sso` uses the SDK's `sso-login` feature: it opens the homeserver's SSO page with `xdg-open`, listens on a loopback port for the redirect, exchanges the login token and stores the session exactly like a password login (5-minute timeout). Only the homeserver field is needed.
+- Verified: `tests/sso_login.rs` runs the whole exchange against a fake homeserver (SSO page URL, redirect with token, token login, session JSON); matrix.org's login flows list `m.login.sso`. NOT verified: a real browser sign-in with Google on matrix.org (matrix.org delegates to OIDC; the SDK's legacy SSO path should work through its compatibility layer) and a Synapse instance with an SSO provider. First manual test on the second PC.
+- Tests: 77 unit (+1 ignored), 4 bin, 26 integration (no-ops without Synapse), 1 SSO. Clippy clean.

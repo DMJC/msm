@@ -41,6 +41,8 @@ pub enum AuthError {
     Homeserver(String),
     #[error("Login failed: {0}")]
     Login(String),
+    #[error("Sign-in with your browser was not completed in time.")]
+    SsoTimeout,
     #[error("Could not access local session data: {0}")]
     Storage(String),
     #[error("Your session has expired or was revoked; please log in again.")]
@@ -120,6 +122,65 @@ pub async fn login(
     Ok(client)
 }
 
+/// Sign in through the homeserver's single sign-on page (Google, GitHub, …). `open_url`
+/// is given the page to show in the user's browser; the SDK then waits on a loopback
+/// port for the redirect. The session is saved like a password login.
+pub async fn login_sso<F, Fut>(
+    homeserver: &str,
+    base: &Path,
+    open_url: F,
+) -> Result<Client, AuthError>
+where
+    F: FnOnce(String) -> Fut + Send,
+    Fut: std::future::Future<Output = matrix_sdk::Result<()>> + Send,
+{
+    let (client, json) = login_sso_unsaved(homeserver, base, open_url).await?;
+    if let Err(e) = secrets::save(SESSION_KIND, &json).await {
+        tracing::warn!("session will not persist: {e}");
+    }
+    Ok(client)
+}
+
+/// [`login_sso`] without touching the secret store (the session JSON holds tokens).
+pub async fn login_sso_unsaved<F, Fut>(
+    homeserver: &str,
+    base: &Path,
+    open_url: F,
+) -> Result<(Client, String), AuthError>
+where
+    F: FnOnce(String) -> Fut + Send,
+    Fut: std::future::Future<Output = matrix_sdk::Result<()>> + Send,
+{
+    let homeserver = normalize_homeserver(homeserver)?;
+    let passphrase = random_passphrase()?;
+    let _ = std::fs::remove_dir_all(store_dir(base));
+    let client = build_client(&homeserver, base, &passphrase).await?;
+    let attempt = client
+        .matrix_auth()
+        .login_sso(open_url)
+        .initial_device_display_name(DEVICE_NAME)
+        .send();
+    tokio::time::timeout(std::time::Duration::from_secs(300), attempt)
+        .await
+        .map_err(|_| AuthError::SsoTimeout)?
+        .map_err(|e| AuthError::Login(e.to_string()))?;
+    let json = serialise_session(&client, passphrase)?;
+    Ok((client, json))
+}
+
+fn serialise_session(client: &Client, passphrase: String) -> Result<String, AuthError> {
+    let session = client
+        .matrix_auth()
+        .session()
+        .ok_or_else(|| AuthError::Login("server returned no session".into()))?;
+    let stored = StoredSession {
+        homeserver_url: client.homeserver().to_string(),
+        db_passphrase: passphrase,
+        session,
+    };
+    serde_json::to_string(&stored).map_err(|e| AuthError::Storage(e.to_string()))
+}
+
 /// Log in without touching the secret store. Returns the serialised session
 /// (contains tokens: handle as a secret).
 pub async fn login_unsaved(
@@ -142,16 +203,7 @@ pub async fn login_unsaved(
         .initial_device_display_name(DEVICE_NAME)
         .await
         .map_err(|e| AuthError::Login(e.to_string()))?;
-    let session = client
-        .matrix_auth()
-        .session()
-        .ok_or_else(|| AuthError::Login("server returned no session".into()))?;
-    let stored = StoredSession {
-        homeserver_url: client.homeserver().to_string(),
-        db_passphrase: passphrase,
-        session,
-    };
-    let json = serde_json::to_string(&stored).map_err(|e| AuthError::Storage(e.to_string()))?;
+    let json = serialise_session(&client, passphrase)?;
     Ok((client, json))
 }
 

@@ -26,12 +26,14 @@ pub struct LoginUi {
     password: gtk::Entry,
     error: gtk::Label,
     button: gtk::Button,
+    browser: gtk::Button,
 }
 
 impl LoginUi {
     pub fn reset(&self, message: Option<&str>) {
         self.password.set_text("");
         self.button.set_sensitive(true);
+        self.browser.set_sensitive(true);
         self.error.set_text(message.unwrap_or(""));
     }
 }
@@ -66,6 +68,11 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     }
     grid.pack_start(&error, false, false, 0);
     grid.pack_start(&button, false, false, 4);
+    let browser = gtk::Button::with_label("Sign in with your browser (Google, GitHub, SSO…)");
+    browser.set_tooltip_text(Some(
+        "Opens your homeserver's sign-in page in your web browser. Enter only the homeserver above.",
+    ));
+    grid.pack_start(&browser, false, false, 0);
 
     let ui = LoginUi {
         homeserver: homeserver.clone(),
@@ -73,7 +80,47 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         password: password.clone(),
         error: error.clone(),
         button: button.clone(),
+        browser: browser.clone(),
     };
+
+    let a = app.clone();
+    browser.connect_clicked(move |_| {
+        let hs = {
+            let l = a.login_ui.borrow();
+            let Some(l) = l.as_ref() else { return };
+            l.button.set_sensitive(false);
+            l.browser.set_sensitive(false);
+            l.error.set_text("Complete the sign-in in your browser…");
+            l.homeserver.text().to_string()
+        };
+        let a2 = a.clone();
+        spawn_async(
+            async move {
+                authentication::login_sso(&hs, &authentication::data_dir(), |url| async move {
+                    tokio::process::Command::new("xdg-open")
+                        .arg(url)
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn()
+                        .map(|_| ())
+                        .map_err(|e| {
+                            matrix_sdk::Error::UnknownError(
+                                format!("could not open a browser: {e}").into(),
+                            )
+                        })
+                })
+                .await
+            },
+            move |res| match res {
+                Ok(client) => a2.start_session(client),
+                Err(e) => {
+                    if let Some(l) = a2.login_ui.borrow().as_ref() {
+                        l.reset(Some(&e.to_string()));
+                    }
+                }
+            },
+        );
+    });
 
     let a = app.clone();
     button.connect_clicked(move |_| {

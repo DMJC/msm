@@ -5,6 +5,7 @@ These are the checks automated testing could not do. Install msm on the second P
 second account (or the same one) on the same homeserver. Note the result of each in
 PROGRESS.md.
 
+0. **Browser (Google/SSO) sign-in.** Homeserver `matrix.org`, press "Sign in with your browser…", complete Google sign-in; expected: the contact list appears and the session survives a restart. Report any error text.
 1. **QR verification with a real camera.** On the new machine run
    `cargo run --example scan_qr` and hold a QR code (e.g. from Element's "Verify
    session") up to the camera; expected: the payload is printed. Then in msm:
