@@ -936,15 +936,21 @@ impl App {
 
     /// Ask `mxid` to be friends (adds them as a contact if needed).
     pub fn send_friend_request(self: &Rc<Self>, mxid: &str) {
-        let res = self.mgr.borrow_mut().request_friend(mxid, now_ms());
-        match res {
-            Ok(action) => {
-                self.persist_and_sync();
-                self.refresh();
-                self.send_friend_action(mxid, action);
-            }
-            Err(e) => self.set_status(&format!("Could not send friend request: {e}")),
+        if let Err(e) = self.try_send_friend_request(mxid) {
+            self.set_status(&format!("Could not send friend request: {e}"));
         }
+    }
+
+    /// Like [`send_friend_request`](Self::send_friend_request) but hands the error back.
+    pub fn try_send_friend_request(
+        self: &Rc<Self>,
+        mxid: &str,
+    ) -> Result<(), msm::contacts::contact_manager::ContactError> {
+        let action = self.mgr.borrow_mut().request_friend(mxid, now_ms())?;
+        self.persist_and_sync();
+        self.refresh();
+        self.send_friend_action(mxid, action);
+        Ok(())
     }
 
     /// Answer an incoming request.
